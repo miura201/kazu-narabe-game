@@ -1,4 +1,4 @@
-import { store, history } from './store.js';
+import { store, history, account } from './store.js';
 import {
   MAX_PLAYERS, MIN_PLAYERS, randomRoomId, randomId, shuffle, deal,
   revealOrder, liveWrong, lisMarks, isSuccess,
@@ -13,12 +13,15 @@ const app = document.getElementById('app');
 const params = new URLSearchParams(location.search);
 let roomId = params.get('room')?.toUpperCase() ?? null;
 
-// プレイヤーIDはタブごと（sessionStorage）。同じPCで複数タブを開けば別の人として遊べる。
-const pid = sessionStorage.getItem('knr:pid') ?? randomId();
-sessionStorage.setItem('knr:pid', pid);
+// プレイヤーID＝Firebase のログインID（起動時に決まる）
+let pid = null;
 
 let state = null;
 let unsubscribe = null;
+let myHand = {}; // 自分の手札の数字 { カードID: 数字 }
+let unsubHand = null;
+let values = {}; // 答え合わせ中に読める全カードの数字
+let unsubValues = null;
 let dragging = false;
 let composing = false;
 let renderQueued = false;
@@ -43,6 +46,8 @@ function nameOf(s, id) {
   return s.players[id]?.name ?? '（退出した人）';
 }
 
+const valueOf = (id) => values[id] ?? myHand[id] ?? null;
+const valuesReady = () => state.line.every((id) => values[id] != null);
 const isHost = () => state?.hostId === pid;
 const update = (fn) => store.update(roomId, fn);
 const inviteUrl = () => `${location.origin}${location.pathname}?room=${roomId}`;
@@ -92,9 +97,24 @@ function renderEntry({ mode, error = '' }) {
         <button class="btn primary big" type="submit">${mode === 'join' ? '参加する' : '部屋を作る'}</button>
         <p class="error">${esc(error)}</p>
       </form>
+      ${mode === 'create' ? googleBoxHtml() : ''}
     </main>`;
   const input = document.getElementById('name-input');
   input.focus();
+  document.getElementById('google-login')?.addEventListener('click', async () => {
+    try {
+      await account.loginWithGoogle();
+      pid = account.user.uid;
+      renderEntry({ mode });
+    } catch (err) {
+      renderEntry({ mode, error: err.code === 'auth/popup-closed-by-user' ? '' : `ログインできませんでした（${err.code ?? err.message}）` });
+    }
+  });
+  document.getElementById('google-logout')?.addEventListener('click', async () => {
+    await account.logout();
+    pid = account.user.uid;
+    renderEntry({ mode });
+  });
   document.getElementById('entry-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const name = input.value.trim();
@@ -103,6 +123,22 @@ function renderEntry({ mode, error = '' }) {
     if (mode === 'join') await joinRoom(name);
     else await createRoom(name);
   });
+}
+
+function googleBoxHtml() {
+  if (account.isGoogle) {
+    const u = account.user;
+    return `
+      <div class="google-box">
+        <span>Google でログイン中：<b>${esc(u.displayName ?? u.email ?? '')}</b><br><span class="hint">この部屋のゲーム履歴が保存されます</span></span>
+        <button class="btn ghost" id="google-logout" type="button">ログアウト</button>
+      </div>`;
+  }
+  return `
+    <div class="google-box">
+      <span class="hint">ホストとして履歴を残したい場合は、部屋を作る前に Google でログインしてください（参加者はログイン不要）</span>
+      <button class="btn" id="google-login" type="button">Google でログイン</button>
+    </div>`;
 }
 
 function renderMessage(title, body, button) {
@@ -124,8 +160,8 @@ async function createRoom(name) {
   await store.create(id, {
     id,
     hostId: pid,
-    createdAt: Date.now(),
-    players: { [pid]: { name, joinedAt: Date.now() } },
+    createdAt: store.now(),
+    players: { [pid]: { name, joinedAt: store.now() } },
     phase: 'lobby', // lobby → playing → reveal → lobby …
     settings: { perPlayer: 1, topicMode: RANDOM_ID },
     topic: { current: null, by: null, candidates: {}, spin: null },
@@ -143,15 +179,17 @@ async function createRoom(name) {
 
 async function joinRoom(name) {
   let error = '';
-  await update((s) => {
+  const result = await update((s) => {
+    error = '';
     if (s.players[pid]) return s;
     if (Object.keys(s.players).length >= MAX_PLAYERS) {
       error = `この部屋は満員です（最大${MAX_PLAYERS}人）`;
       return undefined;
     }
-    s.players[pid] = { name, joinedAt: Date.now() };
+    s.players[pid] = { name, joinedAt: store.now() };
     return s;
   });
+  if (!result) error = 'この部屋は見つかりませんでした';
   if (error) renderEntry({ mode: 'join', error });
   else enterRoom();
 }
@@ -180,6 +218,29 @@ function enterRoom() {
     state = s;
     requestRender();
   });
+  unsubHand?.();
+  unsubHand = store.subscribeHand(roomId, pid, (hand) => {
+    myHand = hand;
+    if (state) requestRender();
+  });
+}
+
+// 答え合わせ中だけ全カードの数字を読み込む
+function syncValues() {
+  if (state.phase === 'reveal') {
+    if (unsubValues) return;
+    unsubValues = store.subscribeValues(roomId, (v) => {
+      values = v;
+      requestRender();
+    }, () => {
+      // まだ答え合わせ中になっていない（読む許可がない）ときは、次の更新でやり直す
+      unsubValues = null;
+    });
+  } else if (unsubValues || Object.keys(values).length) {
+    unsubValues?.();
+    unsubValues = null;
+    values = {};
+  }
 }
 
 function requestRender() {
@@ -206,6 +267,7 @@ function render() {
   }
   if (!document.getElementById('stage')) enterRoom();
 
+  syncValues();
   startSpinIfNew();
   document.getElementById('history-btn').hidden = !isHost();
   patch(document.getElementById('players'), playersHtml());
@@ -220,6 +282,7 @@ function render() {
 
 function goHome() {
   unsubscribe?.();
+  unsubHand?.();
   roomId = null;
   window.history.replaceState(null, '', location.pathname);
   renderEntry({ mode: 'create' });
@@ -262,7 +325,7 @@ function startSpinIfNew() {
   const spin = state.topic.spin;
   if (!spin || spin.id === lastSpinId) return;
   lastSpinId = spin.id;
-  if (Date.now() - spin.at > SPIN_FRESH_MS) return;
+  if (store.now() - spin.at > SPIN_FRESH_MS) return;
   // だんだん遅くなりながらお題が切り替わり、最後に結果で止まる
   const steps = 18;
   const items = spin.items.length ? spin.items : [spin.result];
@@ -291,7 +354,7 @@ function startSpinIfNew() {
 
 function spinTopic(list, pick) {
   const items = shuffle(list).slice(0, 14);
-  return { id: randomId(), at: Date.now(), items, result: pick };
+  return { id: randomId(), at: store.now(), items, result: pick };
 }
 
 // ---------- メインエリア ----------
@@ -349,7 +412,7 @@ function cardHtml(card, { faceUp = false, draggable = false, classes = '' } = {}
   return `
     <div class="card ${faceUp ? 'face' : 'back'} ${classes}" data-card="${card.id}" ${draggable ? `data-drag="${card.id}"` : ''} title="${esc(nameOf(state, card.owner))}：${esc(card.word)}">
       <div class="card-owner">${esc(nameOf(state, card.owner))}</div>
-      ${faceUp ? `<div class="card-num">${card.value}</div>` : '<div class="card-mark">?</div>'}
+      ${faceUp ? `<div class="card-num">${valueOf(card.id) ?? '…'}</div>` : '<div class="card-mark">?</div>'}
       <div class="card-word">${esc(card.word)}</div>
     </div>`;
 }
@@ -357,17 +420,18 @@ function cardHtml(card, { faceUp = false, draggable = false, classes = '' } = {}
 function lineHtml() {
   const s = state;
   const playing = s.phase === 'playing';
-  const values = s.line.map((id) => s.cards[id].value);
   let inner;
   if (playing) {
     inner = s.line.map((id) => cardHtml(s.cards[id], { draggable: true })).join('');
   } else {
     const { direction, count } = s.reveal;
+    const ready = valuesReady();
+    const nums = s.line.map(valueOf);
     const order = direction ? revealOrder(s.line.length, direction) : [];
     const revealed = new Set(order.slice(0, count));
-    const wrong = direction ? liveWrong(values, direction, count) : new Set();
+    const wrong = direction && ready ? liveWrong(nums, direction, count) : new Set();
     const done = direction && count >= s.line.length;
-    const marks = done ? lisMarks(values) : null;
+    const marks = done && ready ? lisMarks(nums) : null;
     const next = direction && !done ? order[count] : -1;
     inner = s.line.map((id, i) => {
       const cls = [
@@ -404,11 +468,11 @@ function stagingHtml() {
 function resultHtml() {
   const s = state;
   const { direction, count } = s.reveal;
-  if (!direction || count < s.line.length) return '';
-  const values = s.line.map((id) => s.cards[id].value);
-  const ok = isSuccess(values);
-  const marks = lisMarks(values);
-  const sorted = [...s.line].sort((a, b) => s.cards[a].value - s.cards[b].value);
+  if (!direction || count < s.line.length || !valuesReady()) return '';
+  const nums = s.line.map(valueOf);
+  const ok = isSuccess(nums);
+  const marks = lisMarks(nums);
+  const sorted = [...s.line].sort((a, b) => valueOf(a) - valueOf(b));
   return `
     <div class="panel result ${ok ? 'success' : 'fail'}">
       <div class="result-title">${ok ? '🎉 成功！' : '😵 失敗…'}</div>
@@ -420,7 +484,7 @@ function resultHtml() {
         </ul>
         <div class="correct">
           <div class="correct-label">正しい並び</div>
-          <div class="correct-row">${sorted.map((id) => `<span class="mini"><b>${s.cards[id].value}</b>${esc(nameOf(s, s.cards[id].owner))}</span>`).join('')}</div>
+          <div class="correct-row">${sorted.map((id) => `<span class="mini"><b>${valueOf(id)}</b>${esc(nameOf(s, s.cards[id].owner))}</span>`).join('')}</div>
         </div>`}
     </div>`;
 }
@@ -471,7 +535,7 @@ function handHtml() {
   const s = state;
   const mine = Object.values(s.cards).filter((c) => c.owner === pid);
   if (mine.length === 0) return '<div class="panel waiting">観戦中です。次のゲームから参加できます。</div>';
-  const unplayed = mine.filter((c) => !c.played).sort((a, b) => a.value - b.value);
+  const unplayed = mine.filter((c) => !c.played).sort((a, b) => (valueOf(a.id) ?? 0) - (valueOf(b.id) ?? 0));
   if (unplayed.length === 0) return '<div class="panel waiting">手札をすべて出しました。みんなで並べ方を相談しましょう。</div>';
   return `
     <div class="panel hand">
@@ -479,7 +543,7 @@ function handHtml() {
       <div class="hand-row">
         ${unplayed.map((c) => `
           <form class="hand-card" data-form="play" data-id="${c.id}">
-            <div class="card face mine"><div class="card-num">${c.value}</div></div>
+            <div class="card face mine"><div class="card-num">${valueOf(c.id) ?? '…'}</div></div>
             <input data-keep="word-${c.id}" maxlength="40" placeholder="ひとこと" autocomplete="off" required>
             <button class="btn primary" type="submit">出す</button>
           </form>`).join('')}
@@ -537,21 +601,22 @@ async function saveHistoryIfDone() {
   const s = state;
   if (!isHost() || s.phase !== 'reveal') return;
   const { direction, count } = s.reveal;
-  if (!direction || count < s.line.length || s.savedRound === s.round) return;
-  const values = s.line.map((id) => s.cards[id].value);
-  const marks = lisMarks(values);
-  const wrong = liveWrong(values, direction, count);
+  if (!direction || count < s.line.length || s.savedRound === s.round || !valuesReady()) return;
+  if (!account.isGoogle) return;
+  const nums = s.line.map(valueOf);
+  const marks = lisMarks(nums);
+  const wrong = liveWrong(nums, direction, count);
   await update((st) => (st.savedRound === st.round ? undefined : { ...st, savedRound: st.round }));
   await history.add({
     id: randomId(),
     at: Date.now(),
     topic: s.topic.current,
     direction,
-    success: isSuccess(values),
+    success: isSuccess(nums),
     cards: s.line.map((id, i) => ({
       name: nameOf(s, s.cards[id].owner),
       word: s.cards[id].word,
-      value: s.cards[id].value,
+      value: valueOf(id),
       wrong: wrong.has(i),
       mark: marks[i],
     })),
@@ -564,6 +629,20 @@ async function renderHistoryModal() {
     el.innerHTML = '';
     return;
   }
+  if (!account.isGoogle) {
+    el.innerHTML = `
+      <div class="modal-back" data-action="close-history">
+        <div class="modal">
+          <div class="modal-head">
+            <h3>ゲーム履歴</h3>
+            <button class="btn ghost" data-action="close-history">閉じる</button>
+          </div>
+          <p>履歴を残すには、<b>部屋を作る前に</b>トップ画面で「Google でログイン」してください。</p>
+          <p class="hint">部屋の途中でログインするとホストが入れ替わってしまうため、トップ画面でのみログインできます。</p>
+        </div>
+      </div>`;
+    return;
+  }
   const list = await history.list();
   const fmt = (t) => new Date(t).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   el.innerHTML = `
@@ -573,7 +652,7 @@ async function renderHistoryModal() {
           <h3>ゲーム履歴</h3>
           <button class="btn ghost" data-action="close-history">閉じる</button>
         </div>
-        <p class="hint">この履歴はホストのあなただけが見られます（いまはこのブラウザに保存）</p>
+        <p class="hint">この履歴は Google でログインしたあなただけが見られます</p>
         ${list.length === 0 ? '<p>まだ履歴はありません</p>' : list.map((h) => `
           <div class="hist ${h.success ? 'success' : 'fail'}">
             <div class="hist-head">
@@ -647,11 +726,15 @@ const actions = {
     });
   },
 
-  start() {
+  async start() {
+    const ids = playersOf(state).map((p) => p.id);
+    if (ids.length < MIN_PLAYERS || !state.topic.current) return;
+    // 数字（本人しか読めない場所）を先に書いてから、ゲームを始める
+    const { cards, hands, values: allValues } = deal(ids, state.settings.perPlayer);
+    await store.deal(roomId, hands, allValues);
     update((s) => {
-      const ids = playersOf(s).map((p) => p.id);
-      if (ids.length < MIN_PLAYERS || !s.topic.current) return undefined;
-      s.cards = deal(ids, s.settings.perPlayer);
+      if (s.phase !== 'lobby') return undefined;
+      s.cards = cards;
       s.line = [];
       s.staging = [];
       s.reveal = null;
@@ -687,13 +770,15 @@ const actions = {
     });
   },
 
-  'next-game'() {
-    update((s) => backToLobby(s, { keepTopic: false }));
+  async 'next-game'() {
+    await update((s) => backToLobby(s, { keepTopic: false }));
+    store.clearDeal(roomId);
   },
 
-  abort() {
+  async abort() {
     if (!window.confirm('ゲームをやめてロビーに戻りますか？（配った数字はリセットされます）')) return;
-    update((s) => backToLobby(s, { keepTopic: true }));
+    await update((s) => backToLobby(s, { keepTopic: true }));
+    store.clearDeal(roomId);
   },
 
   'open-history'() {
@@ -808,6 +893,13 @@ setupDrag({
 // ---------- 起動 ----------
 
 (async function init() {
+  app.innerHTML = '<main class="entry"><p class="hint">接続しています…</p></main>';
+  try {
+    pid = (await account.ready()).uid;
+  } catch (err) {
+    renderMessage('接続できませんでした', `通信状態を確認して、ページを再読み込みしてください（${err.code ?? err.message}）`);
+    return;
+  }
   if (!roomId) {
     renderEntry({ mode: 'create' });
     return;

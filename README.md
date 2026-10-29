@@ -3,11 +3,13 @@
 数字をお題に沿った「ひとこと」で表現し、みんなで小さい順に並べる協力型ブラウザゲーム。
 仕様は [SPEC.md](SPEC.md) を参照。
 
-## いまの状態
+## しくみ
 
-- 画面とゲームの流れはすべて実装済み。
-- データは **同じPCのブラウザ内（localStorage）** だけで共有する「ローカル版」。
-  遠くの友達と遊ぶには、Firebase 版の保存層（`js/store.js` の差し替え）が必要。
+- 部屋の状態は Firebase Realtime Database で全員の画面に同期する。
+- 参加者は匿名ログイン（操作不要）。手札の数字は本人しか読めず、全カードの数字は答え合わせ中だけ読める。
+- ホストは部屋を作る前に Google でログインすると、ゲーム履歴が自分のアカウントに保存される。
+- セキュリティルールは [database.rules.json](database.rules.json)。変更したら Firebase コンソールの
+  Realtime Database →「ルール」に貼り付けて公開する。
 
 ## ローカルで動かす
 
@@ -29,6 +31,8 @@ powershell -ExecutionPolicy Bypass -File serve.ps1
 | `js/app.js` | 画面の表示と操作 |
 | `js/logic.js` | ルールの計算（配る、赤くする判定、ずれていたカードの判定） |
 | `js/drag.js` | カードのドラッグ操作（マウス・タッチ対応） |
-| `js/store.js` | 部屋の状態と履歴の保存先（いまはローカル版） |
+| `js/store.js` | Firebase とのやりとり（部屋の状態・手札・履歴・ログイン） |
+| `js/firebase-config.js` | Firebase の接続先 |
+| `database.rules.json` | Firebase のセキュリティルール |
 | `js/topics.js` | お題（仮） |
 | `serve.ps1` | ローカル確認用の簡易サーバー |

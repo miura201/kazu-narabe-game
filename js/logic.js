@@ -24,20 +24,25 @@ export function shuffle(list) {
   return a;
 }
 
-// 1〜100 から重複なしで、各プレイヤーに perPlayer 枚ずつ配る
+// 1〜100 から重複なしで、各プレイヤーに perPlayer 枚ずつ配る。
+// cards は全員に見える情報（数字なし）、hands は人ごとの数字、values は全カードの数字。
 export function deal(playerIds, perPlayer) {
   const numbers = shuffle(Array.from({ length: 100 }, (_, i) => i + 1));
   const cards = {};
+  const hands = {};
+  const values = {};
   let k = 0;
   for (const owner of playerIds) {
-    const values = numbers.slice(k, k + perPlayer).sort((a, b) => a - b);
-    k += perPlayer;
-    for (const value of values) {
+    hands[owner] = {};
+    for (const value of numbers.slice(k, k + perPlayer)) {
       const id = randomId();
-      cards[id] = { id, owner, value, word: '', played: false };
+      cards[id] = { id, owner, word: '', played: false };
+      hands[owner][id] = value;
+      values[id] = value;
     }
+    k += perPlayer;
   }
-  return cards;
+  return { cards, hands, values };
 }
 
 // めくる順番（列の位置の並び）。asc は左（小）から、desc は右（大）から。

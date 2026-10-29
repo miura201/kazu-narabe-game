@@ -101,6 +101,18 @@ input:focus, select:focus { outline: none; border-color: var(--indigo); }
   box-shadow: 0 6px 0 var(--ink);
 }
 .entry-card h2 { margin: 0; }
+.google-box {
+  margin-top: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+  font-size: .9rem;
+  padding: 12px 16px;
+  border: 2px dashed var(--line);
+  border-radius: var(--radius);
+}
 .entry-room { margin: 0; }
 
 /* ---------- 部屋 ---------- */

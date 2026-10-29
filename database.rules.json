@@ -1,0 +1,28 @@
+{
+  "rules": {
+    "rooms": {
+      "$room": {
+        "state": {
+          ".read": "auth != null",
+          ".write": "auth != null && (!data.exists() || data.child('players').child(auth.uid).exists() || newData.child('players').child(auth.uid).exists())"
+        },
+        "hands": {
+          ".write": "auth != null && root.child('rooms').child($room).child('state/hostId').val() === auth.uid",
+          "$uid": {
+            ".read": "auth != null && auth.uid === $uid"
+          }
+        },
+        "values": {
+          ".read": "auth != null && root.child('rooms').child($room).child('state/phase').val() === 'reveal'",
+          ".write": "auth != null && root.child('rooms').child($room).child('state/hostId').val() === auth.uid"
+        }
+      }
+    },
+    "users": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid"
+      }
+    }
+  }
+}
