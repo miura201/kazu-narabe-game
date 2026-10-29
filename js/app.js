@@ -3,7 +3,7 @@ import {
   MAX_PLAYERS, MIN_PLAYERS, randomRoomId, randomId, shuffle, deal,
   revealOrder, liveWrong, lisMarks, isSuccess,
 } from './logic.js';
-import { TOPIC_MODES, FREE_ID, RANDOM_ID, topicsFor } from './topics.js';
+import { TOPIC_MODES, FREE_ID, topicsFor } from './topics.js';
 import { setupDrag } from './drag.js';
 
 const GAME_TITLE = 'かずならべ';
@@ -162,9 +162,9 @@ async function createRoom(name) {
     hostId: pid,
     createdAt: store.now(),
     players: { [pid]: { name, joinedAt: store.now() } },
-    phase: 'lobby', // lobby → playing → reveal → lobby …
-    settings: { perPlayer: 1, topicMode: RANDOM_ID },
-    topic: { current: null, by: null, candidates: {}, spin: null },
+    phase: 'lobby', // lobby → topic → playing → reveal → lobby …
+    settings: { perPlayer: 1 },
+    topic: newTopic(),
     cards: {},
     line: [],
     staging: [],
@@ -271,7 +271,9 @@ function render() {
   startSpinIfNew();
   document.getElementById('history-btn').hidden = !isHost();
   patch(document.getElementById('players'), playersHtml());
-  patch(document.getElementById('topic'), topicHtml());
+  const topicEl = document.getElementById('topic');
+  topicEl.hidden = state.phase === 'lobby';
+  patch(topicEl, state.phase === 'lobby' ? '' : topicHtml());
   patch(document.getElementById('stage'), stageHtml());
   patch(document.getElementById('controls'), controlsHtml());
   if (historyOpen && !isHost()) actions['close-history']();
@@ -292,13 +294,13 @@ function goHome() {
 
 function playersHtml() {
   const s = state;
-  const inGame = s.phase !== 'lobby';
+  const inGame = s.phase === 'playing' || s.phase === 'reveal';
   return playersOf(s).map((p) => {
     const hand = Object.values(s.cards).filter((c) => c.owner === p.id);
     const left = hand.filter((c) => !c.played).length;
     const status = !inGame ? '' : hand.length === 0 ? '<span class="chip-sub">観戦</span>'
       : left > 0 ? `<span class="chip-sub">手札${left}枚</span>` : '<span class="chip-sub done">出しきり</span>';
-    const remove = isHost() && s.phase === 'lobby' && p.id !== pid
+    const remove = isHost() && (s.phase === 'lobby' || s.phase === 'topic') && p.id !== pid
       ? `<button class="chip-x" data-action="remove-player" data-id="${p.id}" title="部屋から外す">×</button>` : '';
     return `<span class="chip ${p.id === pid ? 'me' : ''}">
       ${p.id === s.hostId ? '<span class="crown" title="ホスト">👑</span>' : ''}
@@ -315,7 +317,10 @@ function topicHtml() {
     return `<div class="topic-label">お題</div><div class="topic-text reel"><span id="reel-text">${esc(spinAnim.text)}</span></div>`;
   }
   if (!t.current) {
-    return `<div class="topic-label">お題</div><div class="topic-text empty">${isHost() ? 'お題を決めてください' : 'ホストがお題を決めています'}</div>`;
+    const waiting = t.step === 'input' ? 'みんなでお題を考えています…'
+      : t.step === 'vote' ? 'やりたいお題に投票してください'
+      : isHost() ? 'ジャンルを選んでルーレットを回してください' : 'ホストがお題を選んでいます…';
+    return `<div class="topic-label">お題</div><div class="topic-text empty">${waiting}</div>`;
   }
   const by = t.by ? `<div class="topic-by">${esc(nameOf(state, t.by))} さんの案</div>` : '';
   return `<div class="topic-label">お題</div><div class="topic-text">${esc(t.current)}</div>${by}`;
@@ -357,54 +362,141 @@ function spinTopic(list, pick) {
   return { id: randomId(), at: store.now(), items, result: pick };
 }
 
+function newTopic() {
+  return { current: null, by: null, step: 'choose', genre: null, submissions: {}, votes: {}, tally: null, spin: null };
+}
+
+// 自由入力で出されたお題（おまかせを除く）
+function candidatesOf(s) {
+  return Object.entries(s.topic.submissions)
+    .filter(([, text]) => text)
+    .map(([owner, text]) => ({ owner, text }));
+}
+
+// 投票を集計してお題を決める。同票ならその中からランダム（ルーレット演出つき）
+function decideByVote(s) {
+  const cands = candidatesOf(s);
+  if (cands.length === 0) return s;
+  const tally = Object.fromEntries(cands.map((c) => [c.owner, 0]));
+  Object.values(s.topic.votes).forEach((owner) => {
+    if (owner in tally) tally[owner] += 1;
+  });
+  const max = Math.max(...Object.values(tally));
+  const top = cands.filter((c) => tally[c.owner] === max);
+  const win = top[Math.floor(Math.random() * top.length)];
+  s.topic.current = win.text;
+  s.topic.by = win.owner;
+  s.topic.tally = tally;
+  s.topic.spin = top.length > 1 ? spinTopic(top.map((c) => c.text), win.text) : null;
+  return s;
+}
+
 // ---------- メインエリア ----------
 
 function stageHtml() {
   const s = state;
   if (s.phase === 'lobby') return lobbyStageHtml();
+  if (s.phase === 'topic') {
+    if (s.topic.step === 'input') return inputStageHtml();
+    if (s.topic.step === 'vote') return voteStageHtml();
+    return genreStageHtml();
+  }
   return `${lineHtml()}${s.phase === 'playing' ? stagingHtml() : resultHtml()}`;
 }
 
 function lobbyStageHtml() {
   const s = state;
-  const parts = [];
-  if (s.settings.topicMode === FREE_ID) parts.push(candidatesHtml());
-  parts.push(`
+  return `
     <div class="panel howto">
       <h3>遊び方</h3>
       <ol>
-        <li>ホストが枚数とお題を決めて、ゲームを始めます。</li>
+        <li>みんながそろったら、ホストが枚数を決めてゲームを始めます。</li>
+        <li>ジャンルを選んでルーレットを回すか、みんなでお題を出し合って投票してお題を決めます。</li>
         <li>配られた数字（1〜100）を、お題に沿った「ひとこと」で表現してカードを出します。</li>
         <li>出されたカードは待機エリアに置かれます。みんなで相談して、小さい順になるよう列に並べます。</li>
         <li>並びが決まったら、ホストが答え合わせをして1枚ずつめくります。</li>
       </ol>
       ${Object.keys(s.players).length < MIN_PLAYERS ? `<p class="hint">「招待リンクをコピー」で友達を呼びましょう（${MIN_PLAYERS}人から遊べます）</p>` : ''}
-    </div>`);
-  return parts.join('');
+    </div>`;
 }
 
-function candidatesHtml() {
+function genreStageHtml() {
   const s = state;
-  const list = Object.entries(s.topic.candidates);
-  const mine = s.topic.candidates[pid];
-  const items = list.length === 0
-    ? '<p class="hint">まだお題の案がありません</p>'
-    : `<ul class="cand-list">${list.map(([owner, text]) => `
-        <li class="${s.topic.current === text ? 'chosen' : ''}">
-          <span class="cand-text">${esc(text)}</span>
-          <span class="cand-by">${esc(nameOf(s, owner))}</span>
-          ${isHost() ? `<button class="btn small" data-action="pick-candidate" data-id="${owner}">これにする</button>` : ''}
-        </li>`).join('')}</ul>`;
+  const host = isHost();
   return `
     <div class="panel">
-      <h3>みんなのお題案</h3>
-      <form class="inline-form" data-form="propose">
-        <input data-keep="cand" maxlength="40" placeholder="お題を思いついたら入力（出さなくてもOK）" autocomplete="off">
-        <button class="btn" type="submit">${mine ? '変更する' : '出す'}</button>
-        ${mine ? '<button class="btn ghost" type="button" data-action="withdraw">取り下げる</button>' : ''}
-      </form>
-      ${items}
-      ${isHost() && list.length > 0 ? '<button class="btn" data-action="random-candidate">ランダムで決める</button>' : ''}
+      <h3>ジャンルを選ぶ ${host ? '<span class="hint">押すとルーレットが回ります。もう一度押すと回し直せます</span>' : '<span class="hint">ホストが選びます</span>'}</h3>
+      <div class="genre-grid">
+        ${TOPIC_MODES.map((m) => `
+          <button class="genre-box ${s.topic.genre === m.id ? 'selected' : ''} ${m.id === FREE_ID ? 'free' : ''}"
+            data-action="choose-genre" data-id="${m.id}" ${host ? '' : 'disabled'}>
+            <span class="genre-icon">${m.icon}</span>
+            <span class="genre-name">${m.name}</span>
+            ${m.id === FREE_ID ? '<span class="genre-sub">みんなで出し合う</span>' : ''}
+          </button>`).join('')}
+      </div>
+    </div>`;
+}
+
+function inputStageHtml() {
+  const s = state;
+  const subs = s.topic.submissions;
+  const players = playersOf(s);
+  const doneCount = players.filter((p) => p.id in subs).length;
+  const mine = subs[pid];
+  const form = mine === undefined ? `
+      <form class="topic-input" data-form="submit-topic">
+        <input data-keep="topic-input" maxlength="40" placeholder="やってみたいお題を入力" autocomplete="off">
+        <div class="topic-input-buttons">
+          <button class="btn primary" type="submit">決定</button>
+          <button class="btn" type="button" data-action="omakase">おまかせ</button>
+        </div>
+      </form>` : `
+      <div class="topic-submitted">
+        <p>${mine ? `「<b>${esc(mine)}</b>」を出しました` : '<b>おまかせ</b>にしました'}</p>
+        <button class="btn ghost" data-action="redo-topic">入力し直す</button>
+      </div>`;
+  return `
+    <div class="panel input-panel">
+      <h3>お題を考えよう <span class="hint">全員が入力するまで、誰が何を書いたかは見えません</span></h3>
+      ${form}
+      <div class="progress">
+        <div class="progress-label">入力済み ${doneCount}/${players.length}人</div>
+        <div class="progress-row">
+          ${players.map((p) => `<span class="progress-chip ${p.id in subs ? 'done' : ''}">${p.id in subs ? '✓' : '…'} ${esc(p.name)}</span>`).join('')}
+        </div>
+      </div>
+    </div>`;
+}
+
+function voteStageHtml() {
+  const s = state;
+  const t = s.topic;
+  const cands = candidatesOf(s);
+  const omakase = Object.entries(t.submissions).filter(([, text]) => !text).map(([id]) => nameOf(s, id));
+  const decided = !!t.current;
+  if (cands.length === 0) {
+    return `<div class="panel waiting">お題が1つも出ませんでした（全員おまかせ）。${isHost() ? 'ジャンル選びに戻ってください。' : 'ホストがやり直します。'}</div>`;
+  }
+  const players = playersOf(s);
+  const voted = players.filter((p) => p.id in t.votes).length;
+  return `
+    <div class="panel">
+      <h3>${decided ? '投票結果' : 'やりたいお題に投票'} ${decided ? '' : `<span class="hint">投票済み ${voted}/${players.length}人。全員が投票すると決まります（同票ならランダム）</span>`}</h3>
+      <ul class="vote-list">
+        ${cands.map((c) => {
+          const mineVote = t.votes[pid] === c.owner;
+          const win = decided && t.by === c.owner;
+          return `
+            <li class="${mineVote ? 'voted' : ''} ${win && !spinAnim ? 'winner' : ''}">
+              <span class="cand-text">${esc(c.text)}</span>
+              <span class="cand-by">${esc(nameOf(s, c.owner))}</span>
+              ${decided ? `<span class="vote-count">${t.tally?.[c.owner] ?? 0}票</span>`
+                : `<button class="btn small ${mineVote ? 'primary' : ''}" data-action="vote" data-id="${c.owner}">${mineVote ? '投票中' : '投票する'}</button>`}
+            </li>`;
+        }).join('')}
+      </ul>
+      ${omakase.length ? `<p class="hint">おまかせ：${omakase.map(esc).join('、')}</p>` : ''}
     </div>`;
 }
 
@@ -493,7 +585,8 @@ function resultHtml() {
 
 function controlsHtml() {
   const s = state;
-  if (s.phase === 'lobby') return isHost() ? hostLobbyHtml() : '<div class="panel waiting">ホストの準備を待っています…</div>';
+  if (s.phase === 'lobby') return isHost() ? hostLobbyHtml() : '<div class="panel waiting">ホストがゲームを始めるのを待っています…</div>';
+  if (s.phase === 'topic') return isHost() ? hostTopicHtml() : topicWaitingHtml();
   if (s.phase === 'playing') return `${handHtml()}${isHost() ? hostPlayingHtml() : ''}`;
   return isHost() ? hostRevealHtml() : `<div class="panel waiting">${revealStatus()}</div>`;
 }
@@ -501,10 +594,7 @@ function controlsHtml() {
 function hostLobbyHtml() {
   const s = state;
   const n = Object.keys(s.players).length;
-  const free = s.settings.topicMode === FREE_ID;
-  let reason = '';
-  if (n < MIN_PLAYERS) reason = `${MIN_PLAYERS}人以上で始められます`;
-  else if (!s.topic.current) reason = 'お題を決めてください';
+  const reason = n < MIN_PLAYERS ? `${MIN_PLAYERS}人以上で始められます` : '';
   return `
     <div class="panel host-panel">
       <h3>ホストの設定</h3>
@@ -515,20 +605,48 @@ function hostLobbyHtml() {
             ${[1, 2, 3].map((k) => `<option value="${k}" ${s.settings.perPlayer === k ? 'selected' : ''}>${k}枚</option>`).join('')}
           </select>
         </label>
-        <label class="field">
-          <span>お題の決め方</span>
-          <select data-change="topic-mode">
-            ${TOPIC_MODES.map((m) => `<option value="${m.id}" ${s.settings.topicMode === m.id ? 'selected' : ''}>${m.name}</option>`).join('')}
-          </select>
-        </label>
-        ${free ? '<p class="hint">みんなのお題案から「これにする」で選びます</p>'
-          : `<button class="btn" data-action="spin">🎲 ${s.topic.current ? 'ルーレットを回し直す' : 'ルーレットを回す'}</button>`}
       </div>
       <div class="start-row">
         <button class="btn primary big" data-action="start" ${reason ? 'disabled' : ''}>ゲーム開始</button>
-        ${reason ? `<span class="hint">${reason}</span>` : ''}
+        <span class="hint">${reason || '押すとお題選びに進みます'}</span>
       </div>
     </div>`;
+}
+
+function hostTopicHtml() {
+  const t = state.topic;
+  const back = '<button class="btn ghost" data-action="back-to-genre">ジャンル選びに戻る</button>';
+  const lobby = '<button class="btn ghost" data-action="abort">ロビーに戻る</button>';
+  if (t.current) {
+    return `
+      <div class="panel host-panel row">
+        <button class="btn primary big" data-action="begin-play" ${spinAnim ? 'disabled' : ''}>このお題で始める</button>
+        ${t.step === 'choose' ? '<span class="hint">ジャンルを押すと回し直せます</span>' : back}
+      </div>`;
+  }
+  if (t.step === 'input') {
+    return `
+      <div class="panel host-panel row">
+        <button class="btn" data-action="close-input">締め切って投票へ</button>
+        <span class="hint">全員が入力すると自動で投票に進みます</span>
+        ${back}
+      </div>`;
+  }
+  if (t.step === 'vote') {
+    return `
+      <div class="panel host-panel row">
+        ${candidatesOf(state).length ? '<button class="btn" data-action="close-vote">締め切って決める</button>' : ''}
+        ${back}
+      </div>`;
+  }
+  return `<div class="panel host-panel row"><span class="hint">ジャンルを選んでください</span>${lobby}</div>`;
+}
+
+function topicWaitingHtml() {
+  const t = state.topic;
+  if (t.current) return '<div class="panel waiting">ホストがゲームを始めるのを待っています…</div>';
+  if (t.step === 'choose') return '<div class="panel waiting">ホストがお題を選んでいます…</div>';
+  return '';
 }
 
 function handHtml() {
@@ -684,56 +802,91 @@ const actions = {
   'remove-player'(el) {
     update((s) => {
       delete s.players[el.dataset.id];
-      delete s.topic.candidates[el.dataset.id];
+      delete s.topic.submissions[el.dataset.id];
+      delete s.topic.votes[el.dataset.id];
+      return advanceTopic(s);
+    });
+  },
+
+  start() {
+    update((s) => {
+      if (s.phase !== 'lobby' || Object.keys(s.players).length < MIN_PLAYERS) return undefined;
+      s.phase = 'topic';
+      s.topic = newTopic();
       return s;
     });
   },
 
-  spin() {
-    const list = topicsFor(state.settings.topicMode);
+  // ジャンルのボックスを押す。自由入力なら入力画面へ、それ以外はルーレットを回す
+  'choose-genre'(el) {
+    const genre = el.dataset.id;
+    if (genre === FREE_ID) {
+      update((s) => {
+        s.topic = { ...newTopic(), step: 'input', genre };
+        return s;
+      });
+      return;
+    }
+    const list = topicsFor(genre);
     if (list.length === 0) return;
     const options = list.length > 1 ? list.filter((t) => t !== state.topic.current) : list;
     const pick = options[Math.floor(Math.random() * options.length)];
     update((s) => {
-      s.topic = { ...s.topic, current: pick, by: null, spin: spinTopic(list, pick) };
+      s.topic = { ...newTopic(), genre, current: pick, spin: spinTopic(list, pick) };
       return s;
     });
   },
 
-  withdraw() {
+  omakase() {
+    submitTopic('');
+  },
+
+  'redo-topic'() {
     update((s) => {
-      delete s.topic.candidates[pid];
+      if (s.topic.step !== 'input') return undefined;
+      delete s.topic.submissions[pid];
       return s;
     });
   },
 
-  'pick-candidate'(el) {
+  'close-input'() {
     update((s) => {
-      const text = s.topic.candidates[el.dataset.id];
-      if (!text) return undefined;
-      s.topic = { ...s.topic, current: text, by: el.dataset.id, spin: null };
+      if (s.topic.step !== 'input') return undefined;
+      s.topic.step = 'vote';
       return s;
     });
   },
 
-  'random-candidate'() {
-    const entries = Object.entries(state.topic.candidates);
-    if (entries.length === 0) return;
-    const [owner, text] = entries[Math.floor(Math.random() * entries.length)];
+  vote(el) {
     update((s) => {
-      s.topic = { ...s.topic, current: text, by: owner, spin: spinTopic(entries.map((e) => e[1]), text) };
+      if (s.topic.step !== 'vote' || s.topic.current) return undefined;
+      s.topic.votes[pid] = el.dataset.id;
+      return advanceTopic(s);
+    });
+  },
+
+  'close-vote'() {
+    update((s) => {
+      if (s.topic.step !== 'vote' || s.topic.current) return undefined;
+      return decideByVote(s);
+    });
+  },
+
+  'back-to-genre'() {
+    update((s) => {
+      s.topic = newTopic();
       return s;
     });
   },
 
-  async start() {
+  async 'begin-play'() {
     const ids = playersOf(state).map((p) => p.id);
     if (ids.length < MIN_PLAYERS || !state.topic.current) return;
     // 数字（本人しか読めない場所）を先に書いてから、ゲームを始める
     const { cards, hands, values: allValues } = deal(ids, state.settings.perPlayer);
     await store.deal(roomId, hands, allValues);
     update((s) => {
-      if (s.phase !== 'lobby') return undefined;
+      if (s.phase !== 'topic' || !s.topic.current) return undefined;
       s.cards = cards;
       s.line = [];
       s.staging = [];
@@ -771,13 +924,13 @@ const actions = {
   },
 
   async 'next-game'() {
-    await update((s) => backToLobby(s, { keepTopic: false }));
+    await update(backToLobby);
     store.clearDeal(roomId);
   },
 
   async abort() {
-    if (!window.confirm('ゲームをやめてロビーに戻りますか？（配った数字はリセットされます）')) return;
-    await update((s) => backToLobby(s, { keepTopic: true }));
+    if (state.phase !== 'topic' && !window.confirm('ゲームをやめてロビーに戻りますか？（配った数字はリセットされます）')) return;
+    await update(backToLobby);
     store.clearDeal(roomId);
   },
 
@@ -792,26 +945,45 @@ const actions = {
   },
 };
 
-function backToLobby(s, { keepTopic }) {
+function backToLobby(s) {
   s.phase = 'lobby';
   s.cards = {};
   s.line = [];
   s.staging = [];
   s.reveal = null;
-  if (!keepTopic) s.topic = { current: null, by: null, candidates: {}, spin: null };
+  s.topic = newTopic();
   return s;
 }
 
+// 全員がお題を入力したら投票へ、全員が投票したら集計へ自動で進む
+function advanceTopic(s) {
+  if (s.phase !== 'topic') return s;
+  const ids = Object.keys(s.players);
+  if (s.topic.step === 'input' && ids.every((id) => id in s.topic.submissions)) {
+    s.topic.step = 'vote';
+  }
+  if (s.topic.step === 'vote' && !s.topic.current && candidatesOf(s).length > 0
+      && ids.every((id) => id in s.topic.votes)) {
+    decideByVote(s);
+  }
+  return s;
+}
+
+function submitTopic(text) {
+  update((s) => {
+    if (s.phase !== 'topic' || s.topic.step !== 'input') return undefined;
+    s.topic.submissions[pid] = text;
+    return advanceTopic(s);
+  });
+}
+
 const forms = {
-  propose(form) {
+  'submit-topic'(form) {
     const input = form.querySelector('input');
     const text = input.value.trim();
     if (!text) return;
     input.value = '';
-    update((s) => {
-      s.topic.candidates[pid] = text;
-      return s;
-    });
+    submitTopic(text);
   },
 
   play(form) {
@@ -834,13 +1006,6 @@ const changes = {
   'per-player'(el) {
     update((s) => {
       s.settings.perPlayer = Number(el.value);
-      return s;
-    });
-  },
-
-  'topic-mode'(el) {
-    update((s) => {
-      s.settings.topicMode = el.value;
       return s;
     });
   },

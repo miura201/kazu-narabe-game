@@ -199,6 +199,62 @@ input:focus, select:focus { outline: none; border-color: var(--indigo); }
 .cand-text { flex: 1; font-weight: 700; word-break: break-word; }
 .cand-by { color: var(--muted); font-size: .8rem; }
 
+/* ---------- お題選び ---------- */
+
+.genre-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 10px;
+}
+.genre-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 6px;
+  border: 2px solid var(--ink);
+  border-radius: var(--radius);
+  background: #fff;
+  box-shadow: 0 4px 0 var(--ink);
+  cursor: pointer;
+  transition: transform .08s, box-shadow .08s, background .15s;
+}
+.genre-box:hover:not(:disabled) { background: #fff6ec; }
+.genre-box:active:not(:disabled) { transform: translateY(4px); box-shadow: 0 0 0 var(--ink); }
+.genre-box:disabled { cursor: default; box-shadow: 0 4px 0 var(--line); border-color: var(--line); }
+.genre-box.selected { background: var(--accent); color: #fff; border-color: var(--ink); box-shadow: 0 4px 0 var(--ink); }
+.genre-box.free { border-style: dashed; }
+.genre-box.free.selected { border-style: solid; }
+.genre-icon { font-size: 1.8rem; line-height: 1.2; }
+.genre-name { font-weight: 800; }
+.genre-sub { font-size: .72rem; opacity: .75; }
+
+.input-panel { text-align: center; }
+.input-panel h3 { justify-content: center; }
+.topic-input { display: flex; flex-direction: column; gap: 12px; max-width: 480px; margin: 8px auto 16px; }
+.topic-input input { font-size: 1.2rem; padding: 12px 16px; text-align: center; }
+.topic-input-buttons { display: flex; gap: 10px; justify-content: center; }
+.topic-submitted { margin: 8px auto 16px; }
+.topic-submitted p { font-size: 1.1rem; margin: 0 0 8px; }
+.progress-label { font-size: .85rem; color: var(--muted); margin-bottom: 6px; }
+.progress-row { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+.progress-chip { border: 2px solid var(--line); border-radius: 999px; padding: 2px 10px; font-size: .85rem; color: var(--muted); }
+.progress-chip.done { border-color: var(--ok); color: var(--ok); font-weight: 700; }
+
+.vote-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.vote-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 2px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+.vote-list li.voted { border-color: var(--indigo); }
+.vote-list li.winner { border-color: var(--accent); background: #fff1ee; }
+.vote-count { font-weight: 800; }
+
 /* ---------- 列・待機エリア ---------- */
 
 .zone {

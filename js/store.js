@@ -44,7 +44,11 @@ function normalize(s) {
   s.topic ??= {};
   s.topic.current ??= null;
   s.topic.by ??= null;
-  s.topic.candidates ??= {};
+  s.topic.step ??= 'choose';
+  s.topic.genre ??= null;
+  s.topic.submissions ??= {};
+  s.topic.votes ??= {};
+  s.topic.tally ??= null;
   s.topic.spin ??= null;
   if (s.topic.spin) s.topic.spin.items = toArray(s.topic.spin.items);
   s.reveal ??= null;

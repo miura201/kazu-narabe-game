@@ -4,6 +4,7 @@
 export const GENRES = [
   {
     id: 'daily',
+    icon: '☕',
     name: '日常',
     topics: [
       '朝起きたときの眠さ',
@@ -18,6 +19,7 @@ export const GENRES = [
   },
   {
     id: 'food',
+    icon: '🍙',
     name: '食べ物',
     topics: [
       '好きな食べ物',
@@ -32,6 +34,7 @@ export const GENRES = [
   },
   {
     id: 'love',
+    icon: '💘',
     name: '恋愛',
     topics: [
       'デートで行きたい場所',
@@ -46,6 +49,7 @@ export const GENRES = [
   },
   {
     id: 'ifs',
+    icon: '🌈',
     name: 'もしも',
     topics: [
       '無人島に持っていきたいもの',
@@ -60,6 +64,7 @@ export const GENRES = [
   },
   {
     id: 'animals',
+    icon: '🐾',
     name: '生き物',
     topics: [
       '強そうな生き物',
@@ -77,11 +82,11 @@ export const GENRES = [
 export const RANDOM_ID = 'random';
 export const FREE_ID = 'free';
 
-// お題の決め方の選択肢（プルダウン用）
+// お題の決め方の選択肢（お題選び画面のボックス）
 export const TOPIC_MODES = [
-  { id: RANDOM_ID, name: 'ランダム' },
-  ...GENRES.map((g) => ({ id: g.id, name: g.name })),
-  { id: FREE_ID, name: '自由入力' },
+  { id: RANDOM_ID, name: 'ランダム', icon: '🎲' },
+  ...GENRES.map((g) => ({ id: g.id, name: g.name, icon: g.icon })),
+  { id: FREE_ID, name: '自由入力', icon: '✏️' },
 ];
 
 export function topicsFor(modeId) {
