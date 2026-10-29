@@ -160,6 +160,17 @@ input:focus, select:focus { outline: none; border-color: var(--indigo); }
 }
 .chip-sub { font-size: .75rem; color: var(--muted); font-weight: 400; }
 .chip-sub.done { color: var(--ok); }
+.chip-sub.chooser { color: var(--accent-dark); font-weight: 700; }
+
+.chooser-banner {
+  text-align: center;
+  font-size: 1.05rem;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  border-radius: 10px;
+  background: #f2f1ff;
+}
+.chooser-banner.me { background: var(--accent); color: #fff; }
 .chip-x { border: none; background: none; cursor: pointer; color: var(--muted); padding: 0 0 0 4px; font-size: 1rem; }
 .chip-x:hover { color: var(--wrong); }
 .players-count { color: var(--muted); font-size: .85rem; }
@@ -379,8 +390,26 @@ input:focus, select:focus { outline: none; border-color: var(--indigo); }
 }
 .card.wrong { background: #ffe9e9; border-color: var(--wrong); }
 .card.wrong .card-num { color: var(--wrong); }
-.card.mark-off { outline: 4px solid var(--off); outline-offset: 3px; }
-.card.mark-maybe { outline: 4px dashed var(--maybe); outline-offset: 3px; }
+/* 本当の位置からのずれ（✓ / →2 / ←1） */
+.shift, .shift-sample {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--off);
+  color: #fff;
+  font-weight: 800;
+  font-size: .85rem;
+  line-height: 1.3;
+  border: 2px solid #fff;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, .2);
+}
+.shift { position: absolute; top: -12px; right: -10px; z-index: 1; }
+.shift.ok, .shift-sample.ok { background: var(--ok); }
+.shift.big { background: var(--wrong); font-size: 1rem; }
+.card-row:has(.shift) { padding-top: 10px; }
 .flip-target { cursor: pointer; border-radius: 12px; }
 .card.next { animation: glow 1s infinite alternate; }
 @keyframes glow {
@@ -406,8 +435,7 @@ input:focus, select:focus { outline: none; border-color: var(--indigo); }
 .legend li { display: flex; align-items: center; gap: 8px; }
 .swatch { width: 22px; height: 16px; border-radius: 4px; flex: none; background: #fff; border: 2px solid var(--ink); }
 .swatch.wrong { background: #ffe9e9; border-color: var(--wrong); }
-.swatch.mark-off { border: 3px solid var(--off); }
-.swatch.mark-maybe { border: 3px dashed var(--maybe); }
+.legend .shift-sample { min-width: 40px; flex: none; }
 .correct { margin-top: 8px; }
 .correct-label { font-size: .8rem; color: var(--muted); margin-bottom: 6px; }
 .correct-row, .hist-cards { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
@@ -425,8 +453,9 @@ input:focus, select:focus { outline: none; border-color: var(--indigo); }
 .mini b { font-size: 1.1rem; }
 .mini i { font-style: normal; color: var(--muted); max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mini.wrong { border-color: var(--wrong); background: #ffe9e9; }
-.mini.mark-off { outline: 3px solid var(--off); }
-.mini.mark-maybe { outline: 3px dashed var(--maybe); }
+.mini { position: relative; }
+.mini .shift { top: -10px; right: -8px; min-width: 28px; padding: 0 6px; font-size: .72rem; }
+.hist-cards { padding-top: 10px; }
 
 /* ---------- 履歴 ---------- */
 

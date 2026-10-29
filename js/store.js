@@ -52,6 +52,9 @@ function normalize(s) {
   s.topic.votes ??= {};
   s.topic.tally ??= null;
   s.topic.spin ??= null;
+  s.topic.chooser ??= null;
+  s.topic.ready ??= false;
+  s.lastChooser ??= null;
   if (s.topic.spin) s.topic.spin.items = toArray(s.topic.spin.items);
   s.reveal ??= null;
   return s;

@@ -71,36 +71,16 @@ export function liveWrong(values, direction, revealedCount) {
   return wrong;
 }
 
-// 全部めくったあとの振り返り用の印。
-// 「最小限のカードだけ動かせば正しい並びになる」＝最長増加部分列（LIS）に入らないカードを探す。
-//   'ok'    … どの最長の並びにも必ず含まれる（正しい位置）
-//   'off'   … どの最長の並びにも含まれない（ずれていたカード）
-//   'maybe' … 含まれる並びと含まれない並びがある（どちらとも言えない）
-export function lisMarks(values) {
-  const n = values.length;
-  const L = new Array(n).fill(1);
-  const R = new Array(n).fill(1);
-  for (let i = 0; i < n; i++) {
-    for (let j = 0; j < i; j++) {
-      if (values[j] < values[i]) L[i] = Math.max(L[i], L[j] + 1);
-    }
-  }
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = i + 1; j < n; j++) {
-      if (values[j] > values[i]) R[i] = Math.max(R[i], R[j] + 1);
-    }
-  }
-  const best = Math.max(0, ...L);
-  const inSome = L.map((l, i) => l + R[i] - 1 === best);
-  // LIS の中で k 番目に来られるカードが1枚だけなら、そのカードはすべての LIS に含まれる
-  const countAtLevel = new Map();
-  inSome.forEach((ok, i) => {
-    if (ok) countAtLevel.set(L[i], (countAtLevel.get(L[i]) ?? 0) + 1);
-  });
-  return values.map((_, i) => {
-    if (!inSome[i]) return 'off';
-    return countAtLevel.get(L[i]) === 1 ? 'ok' : 'maybe';
-  });
+// 全部めくったあとの振り返り用。各カードが本当の位置からいくつずれていたか。
+//   0 … 正しい位置 ／ +3 … 本当はあと3つ右（もっと大きい） ／ -1 … 本当はあと1つ左（もっと小さい）
+export function positionShifts(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  return values.map((v, i) => sorted.indexOf(v) - i);
+}
+
+export function shiftLabel(shift) {
+  if (shift === 0) return '✓';
+  return shift > 0 ? `→${shift}` : `←${-shift}`;
 }
 
 export function isSuccess(values) {

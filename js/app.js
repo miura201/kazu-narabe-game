@@ -1,7 +1,7 @@
 import { store, history, account } from './store.js';
 import {
   MAX_PLAYERS, MIN_PLAYERS, randomRoomId, randomId, shuffle, deal,
-  revealOrder, liveWrong, lisMarks, isSuccess,
+  revealOrder, liveWrong, positionShifts, shiftLabel, isSuccess,
 } from './logic.js';
 import { TOPIC_MODES, FREE_ID, topicsFor } from './topics.js';
 import { setupDrag } from './drag.js';
@@ -327,6 +327,8 @@ function render() {
   patch(document.getElementById('controls'), controlsHtml());
   if (historyOpen && !isHost()) actions['close-history']();
   saveHistoryIfDone();
+  // お題番が「このお題で始める」を押したら、ホストの画面が数字を配る
+  if (isHost() && state.phase === 'topic' && state.topic.ready) dealAndStart();
   runEffects();
   if (state.phase !== 'reveal') lastRevealCount = 0;
   else lastRevealCount = state.reveal?.count ?? 0;
@@ -394,7 +396,8 @@ function playersHtml() {
     return `<span class="chip ${p.id === pid ? 'me' : ''} ${isOnline(p.id) ? '' : 'offline'}">
       <span class="dot" title="${isOnline(p.id) ? 'オンライン' : 'オフライン'}"></span>
       ${p.id === s.hostId ? '<span class="crown" title="ホスト">👑</span>' : ''}
-      ${esc(p.name)}${p.id === pid ? '<span class="chip-sub">あなた</span>' : ''}${status}${remove}
+      ${esc(p.name)}${p.id === pid ? '<span class="chip-sub">あなた</span>' : ''}${status}
+      ${s.phase === 'topic' && s.topic.chooser === p.id ? '<span class="chip-sub chooser">🎲お題番</span>' : ''}${remove}
     </span>`;
   }).join('') + `<span class="players-count">${Object.keys(s.players).length}/${MAX_PLAYERS}人</span>`;
 }
@@ -420,7 +423,7 @@ function topicHtml() {
   if (!t.current) {
     const waiting = t.step === 'input' ? 'みんなでお題を考えています…'
       : t.step === 'vote' ? 'やりたいお題に投票してください'
-      : isHost() ? 'ジャンルを選んでルーレットを回してください' : 'ホストがお題を選んでいます…';
+      : isChooser() ? 'ジャンルを選んでルーレットを回してください' : `${esc(nameOf(state, t.chooser))} さんがお題を選んでいます…`;
     return `<div class="topic-label">お題</div><div class="topic-text empty">${waiting}</div>`;
   }
   const by = t.by ? `<div class="topic-by">${esc(nameOf(state, t.by))} さんの案</div>` : '';
@@ -465,8 +468,19 @@ function spinTopic(list, pick) {
   return { id: randomId(), at: store.now(), items, result: pick };
 }
 
-function newTopic() {
-  return { current: null, by: null, step: 'choose', genre: null, submissions: {}, votes: {}, tally: null, spin: null };
+// chooser はお題番（そのゲームでジャンルを選んでルーレットを回す人）。やり直しても同じ人のまま
+function newTopic(chooser = null) {
+  return { current: null, by: null, step: 'choose', genre: null, submissions: {}, votes: {}, tally: null, spin: null, chooser, ready: false };
+}
+
+// お題番が決まっていない（古い部屋など）ときは、ホストがお題番の代わりをする
+const isChooser = () => state?.topic.chooser === pid || (!state?.topic.chooser && state?.hostId === pid);
+
+// お題番は参加した順に1ゲームずつ回る
+function nextChooser(s, after) {
+  const ids = playersOf(s).map((p) => p.id);
+  if (ids.length === 0) return null;
+  return ids[(ids.indexOf(after) + 1) % ids.length];
 }
 
 // 自由入力で出されたお題（おまかせを除く）
@@ -525,14 +539,17 @@ function lobbyStageHtml() {
 
 function genreStageHtml() {
   const s = state;
-  const host = isHost();
+  const me = isChooser();
   return `
     <div class="panel">
-      <h3>ジャンルを選ぶ ${host ? '<span class="hint">押すとルーレットが回ります。もう一度押すと回し直せます</span>' : '<span class="hint">ホストが選びます</span>'}</h3>
+      <div class="chooser-banner ${me ? 'me' : ''}">
+        🎲 今回のお題番：<b>${me ? 'あなた' : `${esc(nameOf(s, s.topic.chooser))} さん`}</b>
+      </div>
+      <h3>ジャンルを選ぶ <span class="hint">${me ? '押すとルーレットが回ります。もう一度押すと回し直せます' : 'お題番の人が選びます'}</span></h3>
       <div class="genre-grid">
         ${TOPIC_MODES.map((m) => `
           <button class="genre-box ${s.topic.genre === m.id ? 'selected' : ''} ${m.id === FREE_ID ? 'free' : ''}"
-            data-action="choose-genre" data-id="${m.id}" ${host ? '' : 'disabled'}>
+            data-action="choose-genre" data-id="${m.id}" ${me ? '' : 'disabled'}>
             <span class="genre-icon">${m.icon}</span>
             <span class="genre-name">${m.name}</span>
             ${m.id === FREE_ID ? '<span class="genre-sub">みんなで出し合う</span>' : ''}
@@ -603,9 +620,16 @@ function voteStageHtml() {
     </div>`;
 }
 
-function cardHtml(card, { faceUp = false, draggable = false, classes = '' } = {}) {
+function shiftBadge(shift) {
+  if (shift === null || shift === undefined) return '';
+  const size = Math.abs(shift) >= 3 ? 'big' : '';
+  return `<span class="shift ${shift === 0 ? 'ok' : size}">${shiftLabel(shift)}</span>`;
+}
+
+function cardHtml(card, { faceUp = false, draggable = false, classes = '', shift = null } = {}) {
   return `
     <div class="card ${faceUp ? 'face' : 'back'} ${classes}" data-card="${card.id}" ${draggable ? `data-drag="${card.id}"` : ''} title="${esc(nameOf(state, card.owner))}：${esc(card.word)}">
+      ${shiftBadge(shift)}
       <div class="card-owner">${esc(nameOf(state, card.owner))}</div>
       ${faceUp ? `<div class="card-num">${valueOf(card.id) ?? '…'}</div>` : '<div class="card-mark">?</div>'}
       <div class="card-word">${esc(card.word)}</div>
@@ -626,16 +650,15 @@ function lineHtml() {
     const revealed = new Set(order.slice(0, count));
     const wrong = direction && ready ? liveWrong(nums, direction, count) : new Set();
     const done = direction && count >= s.line.length;
-    const marks = done && ready ? lisMarks(nums) : null;
+    const shifts = done && ready ? positionShifts(nums) : null;
     const next = direction && !done ? order[count] : -1;
     inner = s.line.map((id, i) => {
       const cls = [
         wrong.has(i) ? 'wrong' : '',
-        marks && marks[i] !== 'ok' ? `mark-${marks[i]}` : '',
         i === next && isHost() ? 'next' : '',
         revealed.has(i) && i === order[count - 1] && count > lastRevealCount ? 'flip-in' : '',
       ].join(' ');
-      const card = cardHtml(s.cards[id], { faceUp: revealed.has(i), classes: cls });
+      const card = cardHtml(s.cards[id], { faceUp: revealed.has(i), classes: cls, shift: shifts?.[i] ?? null });
       return i === next && isHost() ? `<div class="flip-target" data-action="flip">${card}</div>` : card;
     }).join('');
   }
@@ -666,16 +689,16 @@ function resultHtml() {
   if (!direction || count < s.line.length || !valuesReady()) return '';
   const nums = s.line.map(valueOf);
   const ok = isSuccess(nums);
-  const marks = lisMarks(nums);
   const sorted = [...s.line].sort((a, b) => valueOf(a) - valueOf(b));
   return `
     <div class="panel result ${ok ? 'success' : 'fail'}">
       <div class="result-title">${ok ? '🎉 成功！' : '😵 失敗…'}</div>
       ${ok ? '<p>すべて正しい順番に並んでいました。</p>' : `
         <ul class="legend">
-          <li><span class="swatch wrong"></span>めくった時点で順番が逆だったカード</li>
-          ${marks.includes('off') ? '<li><span class="swatch mark-off"></span>ずれていたカード（これだけ動かせば正しい並びになる）</li>' : ''}
-          ${marks.includes('maybe') ? '<li><span class="swatch mark-maybe"></span>ずれていたかもしれないカード（どちらとも言えない）</li>' : ''}
+          <li><span class="shift-sample ok">✓</span>正しい位置にあった</li>
+          <li><span class="shift-sample">→2</span>本当はあと2つ右（もっと大きかった）</li>
+          <li><span class="shift-sample">←1</span>本当はあと1つ左（もっと小さかった）</li>
+          <li><span class="swatch wrong"></span>めくったときに順番が逆になったカード</li>
         </ul>
         <div class="correct">
           <div class="correct-label">正しい並び</div>
@@ -689,7 +712,7 @@ function resultHtml() {
 function controlsHtml() {
   const s = state;
   if (s.phase === 'lobby') return isHost() ? hostLobbyHtml() : '<div class="panel waiting">ホストがゲームを始めるのを待っています…</div>';
-  if (s.phase === 'topic') return isHost() ? hostTopicHtml() : topicWaitingHtml();
+  if (s.phase === 'topic') return isChooser() || isHost() ? topicControlsHtml() : topicWaitingHtml();
   if (s.phase === 'playing') return `${handHtml()}${isHost() ? hostPlayingHtml() : ''}`;
   return isHost() ? hostRevealHtml() : `<div class="panel waiting">${revealStatus()}</div>`;
 }
@@ -716,39 +739,42 @@ function hostLobbyHtml() {
     </div>`;
 }
 
-function hostTopicHtml() {
+// お題選びの操作。お題番が中心に操作し、ホストは困ったときのために同じ操作と「とばす」ができる
+function topicControlsHtml() {
   const t = state.topic;
   const back = '<button class="btn ghost" data-action="back-to-genre">ジャンル選びに戻る</button>';
-  const lobby = '<button class="btn ghost" data-action="abort">ロビーに戻る</button>';
-  if (t.current) {
-    return `
-      <div class="panel host-panel row">
-        <button class="btn primary big" data-action="begin-play" ${spinAnim ? 'disabled' : ''}>このお題で始める</button>
-        ${t.step === 'choose' ? '<span class="hint">ジャンルを押すと回し直せます</span>' : back}
-      </div>`;
+  const hostExtras = isHost()
+    ? `<button class="btn ghost" data-action="skip-chooser">お題番をとばす</button>
+       <button class="btn ghost" data-action="abort">ロビーに戻る</button>` : '';
+  let main;
+  if (t.current && t.ready) {
+    main = '<span class="hint">数字を配っています…</span>';
+  } else if (t.current) {
+    main = `
+      <button class="btn primary big" data-action="begin-play" ${spinAnim ? 'disabled' : ''}>このお題で始める</button>
+      ${t.step === 'choose' ? (isChooser() ? '<span class="hint">ジャンルを押すと回し直せます</span>' : '') : back}`;
+  } else if (t.step === 'input') {
+    main = `
+      <button class="btn" data-action="close-input">締め切って投票へ</button>
+      <span class="hint">全員が入力すると自動で投票に進みます</span>
+      ${back}`;
+  } else if (t.step === 'vote') {
+    main = `
+      ${candidatesOf(state).length ? '<button class="btn" data-action="close-vote">締め切って決める</button>' : ''}
+      ${back}`;
+  } else {
+    main = isChooser()
+      ? '<span class="hint">あなたがお題番です。ジャンルを選んでください</span>'
+      : `<span class="hint">${esc(nameOf(state, t.chooser))} さんがお題を選んでいます</span>`;
   }
-  if (t.step === 'input') {
-    return `
-      <div class="panel host-panel row">
-        <button class="btn" data-action="close-input">締め切って投票へ</button>
-        <span class="hint">全員が入力すると自動で投票に進みます</span>
-        ${back}
-      </div>`;
-  }
-  if (t.step === 'vote') {
-    return `
-      <div class="panel host-panel row">
-        ${candidatesOf(state).length ? '<button class="btn" data-action="close-vote">締め切って決める</button>' : ''}
-        ${back}
-      </div>`;
-  }
-  return `<div class="panel host-panel row"><span class="hint">ジャンルを選んでください</span>${lobby}</div>`;
+  return `<div class="panel host-panel row">${main}${hostExtras}</div>`;
 }
 
 function topicWaitingHtml() {
   const t = state.topic;
-  if (t.current) return '<div class="panel waiting">ホストがゲームを始めるのを待っています…</div>';
-  if (t.step === 'choose') return '<div class="panel waiting">ホストがお題を選んでいます…</div>';
+  const who = esc(nameOf(state, t.chooser));
+  if (t.current) return `<div class="panel waiting">${who} さんがゲームを始めるのを待っています…</div>`;
+  if (t.step === 'choose') return `<div class="panel waiting">お題番の ${who} さんがお題を選んでいます…</div>`;
   return '';
 }
 
@@ -825,7 +851,6 @@ async function saveHistoryIfDone() {
   if (!direction || count < s.line.length || s.savedRound === s.round || !valuesReady()) return;
   if (!account.isGoogle) return;
   const nums = s.line.map(valueOf);
-  const marks = lisMarks(nums);
   const wrong = liveWrong(nums, direction, count);
   await update((st) => (st.savedRound === st.round ? undefined : { ...st, savedRound: st.round }));
   await history.add({
@@ -839,7 +864,6 @@ async function saveHistoryIfDone() {
       word: s.cards[id].word,
       value: valueOf(id),
       wrong: wrong.has(i),
-      mark: marks[i],
     })),
   });
 }
@@ -874,18 +898,23 @@ async function renderHistoryModal() {
           <button class="btn ghost" data-action="close-history">閉じる</button>
         </div>
         <p class="hint">この履歴は Google でログインしたあなただけが見られます</p>
-        ${list.length === 0 ? '<p>まだ履歴はありません</p>' : list.map((h) => `
+        ${list.length === 0 ? '<p>まだ履歴はありません</p>' : list.map((h) => {
+          // ずれは保存した数字から計算する（古い履歴にも矢印が付く）
+          const shifts = positionShifts(h.cards.map((c) => c.value));
+          return `
           <div class="hist ${h.success ? 'success' : 'fail'}">
             <div class="hist-head">
               <span class="hist-result">${h.success ? '成功' : '失敗'}</span>
               <span class="hist-topic">${esc(h.topic)}</span>
               <span class="hist-date">${fmt(h.at)}・${h.direction === 'asc' ? '下から' : '上から'}</span>
             </div>
-            <div class="hist-cards">${h.cards.map((c) => `
-              <span class="mini ${c.wrong ? 'wrong' : ''} ${c.mark !== 'ok' ? `mark-${c.mark}` : ''}">
+            <div class="hist-cards">${h.cards.map((c, i) => `
+              <span class="mini ${c.wrong ? 'wrong' : ''}">
+                ${shiftBadge(shifts[i])}
                 <b>${c.value}</b>${esc(c.name)}<i>${esc(c.word)}</i>
               </span>`).join('')}</div>
-          </div>`).join('')}
+          </div>`;
+        }).join('')}
       </div>
     </div>`;
 }
@@ -908,6 +937,12 @@ const actions = {
         && !window.confirm(`${nameOf(state, id)} さんを外しますか？（その人のカードは場から取り除かれます）`)) return;
     update((s) => {
       if (s.phase === 'reveal') return undefined;
+      // お題番の人を外したら、次の人にお題番を回す
+      if (s.topic.chooser === id) {
+        const next = nextChooser(s, id);
+        s.topic.chooser = next === id ? null : next;
+        s.lastChooser = s.topic.chooser;
+      }
       delete s.players[id];
       delete s.topic.submissions[id];
       delete s.topic.votes[id];
@@ -936,8 +971,20 @@ const actions = {
   start() {
     update((s) => {
       if (s.phase !== 'lobby' || Object.keys(s.players).length < MIN_PLAYERS) return undefined;
+      const chooser = nextChooser(s, s.lastChooser);
       s.phase = 'topic';
-      s.topic = newTopic();
+      s.topic = newTopic(chooser);
+      s.lastChooser = chooser;
+      return s;
+    });
+  },
+
+  'skip-chooser'() {
+    update((s) => {
+      if (s.phase !== 'topic') return undefined;
+      const chooser = nextChooser(s, s.topic.chooser);
+      s.topic = newTopic(chooser);
+      s.lastChooser = chooser;
       return s;
     });
   },
@@ -947,7 +994,7 @@ const actions = {
     const genre = el.dataset.id;
     if (genre === FREE_ID) {
       update((s) => {
-        s.topic = { ...newTopic(), step: 'input', genre };
+        s.topic = { ...newTopic(s.topic.chooser), step: 'input', genre };
         return s;
       });
       return;
@@ -957,7 +1004,7 @@ const actions = {
     const options = list.length > 1 ? list.filter((t) => t !== state.topic.current) : list;
     const pick = options[Math.floor(Math.random() * options.length)];
     update((s) => {
-      s.topic = { ...newTopic(), genre, current: pick, spin: spinTopic(list, pick) };
+      s.topic = { ...newTopic(s.topic.chooser), genre, current: pick, spin: spinTopic(list, pick) };
       return s;
     });
   },
@@ -999,25 +1046,20 @@ const actions = {
 
   'back-to-genre'() {
     update((s) => {
-      s.topic = newTopic();
+      s.topic = newTopic(s.topic.chooser);
       return s;
     });
   },
 
-  async 'begin-play'() {
-    const ids = playersOf(state).map((p) => p.id);
-    if (ids.length < MIN_PLAYERS || !state.topic.current) return;
-    // 数字（本人しか読めない場所）を先に書いてから、ゲームを始める
-    const { cards, hands, values: allValues } = deal(ids, state.settings.perPlayer);
-    await store.deal(roomId, hands, allValues);
+  // 数字を配れるのはホストだけ（セキュリティルール）。お題番が押したら合図を出し、ホストの画面が配る
+  'begin-play'() {
+    if (isHost()) {
+      dealAndStart();
+      return;
+    }
     update((s) => {
       if (s.phase !== 'topic' || !s.topic.current) return undefined;
-      s.cards = cards;
-      s.line = [];
-      s.staging = [];
-      s.reveal = null;
-      s.round += 1;
-      s.phase = 'playing';
+      s.topic.ready = true;
       return s;
     });
   },
@@ -1069,6 +1111,32 @@ const actions = {
     renderHistoryModal();
   },
 };
+
+// 数字を配ってゲームを始める（ホストの画面だけが実行する）
+let dealing = false;
+async function dealAndStart() {
+  if (dealing || !isHost()) return;
+  dealing = true;
+  try {
+    const ids = playersOf(state).map((p) => p.id);
+    if (ids.length < MIN_PLAYERS || !state.topic.current) return;
+    // 数字（本人しか読めない場所）を先に書いてから、ゲームを始める
+    const { cards, hands, values: allValues } = deal(ids, state.settings.perPlayer);
+    await store.deal(roomId, hands, allValues);
+    await update((s) => {
+      if (s.phase !== 'topic' || !s.topic.current) return undefined;
+      s.cards = cards;
+      s.line = [];
+      s.staging = [];
+      s.reveal = null;
+      s.round += 1;
+      s.phase = 'playing';
+      return s;
+    });
+  } finally {
+    dealing = false;
+  }
+}
 
 function backToLobby(s) {
   s.phase = 'lobby';
