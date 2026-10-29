@@ -730,21 +730,10 @@ function resultHtml() {
   if (!direction || count < s.line.length || !valuesReady()) return '';
   const nums = s.line.map(valueOf);
   const ok = isSuccess(nums);
-  const sorted = [...s.line].sort((a, b) => valueOf(a) - valueOf(b));
+  // ずれはカードの矢印で伝わるので、結果は見出しだけにする
   return `
     <div class="panel result ${ok ? 'success' : 'fail'}">
       <div class="result-title">${ok ? '🎉 成功！' : '😵 失敗…'}</div>
-      ${ok ? '<p>すべて正しい順番に並んでいました。</p>' : `
-        <ul class="legend">
-          <li><span class="shift-sample ok">✓</span>正しい位置にあった</li>
-          <li><span class="shift-sample">→2</span>本当はあと2つ右（もっと大きかった）</li>
-          <li><span class="shift-sample">←1</span>本当はあと1つ左（もっと小さかった）</li>
-          <li><span class="swatch wrong"></span>めくったときに順番が逆になったカード</li>
-        </ul>
-        <div class="correct">
-          <div class="correct-label">正しい並び</div>
-          <div class="correct-row">${sorted.map((id) => `<span class="mini"><b>${valueOf(id)}</b>${esc(nameOf(s, s.cards[id].owner))}</span>`).join('')}</div>
-        </div>`}
     </div>`;
 }
 

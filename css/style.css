@@ -392,7 +392,7 @@ input:focus, select:focus { outline: none; border-color: var(--indigo); }
 .card.wrong { background: #ffe9e9; border-color: var(--wrong); }
 .card.wrong .card-num { color: var(--wrong); }
 /* 本当の位置からのずれ（✓ / →2 / ←1） */
-.shift, .shift-sample {
+.shift {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -408,7 +408,7 @@ input:focus, select:focus { outline: none; border-color: var(--indigo); }
   box-shadow: 0 2px 4px rgba(0, 0, 0, .2);
 }
 .shift { position: absolute; top: -12px; right: -10px; z-index: 1; }
-.shift.ok, .shift-sample.ok { background: var(--ok); }
+.shift.ok { background: var(--ok); }
 .shift.big { background: var(--wrong); font-size: 1rem; }
 .card-row:has(.shift) { padding-top: 10px; }
 .flip-target { cursor: pointer; border-radius: 12px; }
@@ -432,14 +432,7 @@ input:focus, select:focus { outline: none; border-color: var(--indigo); }
 .result.success { border-color: var(--ok); background: #effaf4; }
 .result.fail { border-color: var(--wrong); background: #fff5f5; }
 .result-title { font-size: 1.8rem; font-weight: 800; }
-.legend { list-style: none; padding: 0; margin: 12px auto; display: inline-flex; flex-direction: column; gap: 6px; text-align: left; font-size: .9rem; }
-.legend li { display: flex; align-items: center; gap: 8px; }
-.swatch { width: 22px; height: 16px; border-radius: 4px; flex: none; background: #fff; border: 2px solid var(--ink); }
-.swatch.wrong { background: #ffe9e9; border-color: var(--wrong); }
-.legend .shift-sample { min-width: 40px; flex: none; }
-.correct { margin-top: 8px; }
-.correct-label { font-size: .8rem; color: var(--muted); margin-bottom: 6px; }
-.correct-row, .hist-cards { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+.hist-cards { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
 .mini {
   display: inline-flex;
   flex-direction: column;
