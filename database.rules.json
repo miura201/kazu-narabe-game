@@ -12,6 +12,12 @@
             ".read": "auth != null && auth.uid === $uid"
           }
         },
+        "presence": {
+          ".read": "auth != null",
+          "$uid": {
+            ".write": "auth != null && auth.uid === $uid"
+          }
+        },
         "values": {
           ".read": "auth != null && root.child('rooms').child($room).child('state/phase').val() === 'reveal'",
           ".write": "auth != null && root.child('rooms').child($room).child('state/hostId').val() === auth.uid"

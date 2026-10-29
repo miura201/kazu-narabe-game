@@ -143,6 +143,21 @@ input:focus, select:focus { outline: none; border-color: var(--indigo); }
   font-weight: 700;
 }
 .chip.me { border-color: var(--indigo); }
+.chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
+.chip.offline { opacity: .55; }
+.chip.offline .dot { background: var(--muted); }
+
+.notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: #fff4d6;
+  border: 2px solid var(--off);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+}
 .chip-sub { font-size: .75rem; color: var(--muted); font-weight: 400; }
 .chip-sub.done { color: var(--ok); }
 .chip-x { border: none; background: none; cursor: pointer; color: var(--muted); padding: 0 0 0 4px; font-size: 1rem; }
@@ -456,6 +471,49 @@ input:focus, select:focus { outline: none; border-color: var(--indigo); }
   z-index: 2000;
   animation: pulse .2s;
 }
+
+/* ---------- 紙吹雪 ---------- */
+
+.confetti { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 3000; }
+.confetti i {
+  position: absolute;
+  top: -20px;
+  width: 9px;
+  height: 14px;
+  border-radius: 2px;
+  animation-name: confetti-fall;
+  animation-timing-function: cubic-bezier(.25, .6, .4, 1);
+  animation-fill-mode: forwards;
+}
+@keyframes confetti-fall {
+  to { transform: translate(var(--drift), 105vh) rotate(var(--spin)); }
+}
+
+/* ---------- カードの詳細（長いひとことの全文） ---------- */
+
+.card-detail-back {
+  position: fixed;
+  inset: 0;
+  z-index: 600;
+  background: rgba(30, 25, 45, .35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.card-detail {
+  background: var(--paper);
+  border: 2px solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 0 var(--ink);
+  padding: 20px 24px;
+  width: min(420px, 100%);
+  text-align: center;
+}
+.card-detail .detail-owner { color: var(--muted); font-size: .9rem; }
+.card-detail .detail-num { font-size: 2.6rem; font-weight: 800; line-height: 1.1; margin-top: 6px; }
+.card-detail .detail-word { font-size: 1.3rem; font-weight: 800; margin: 10px 0 14px; word-break: break-word; line-height: 1.4; }
+.card[data-card]:not([data-drag]) { cursor: pointer; }
 
 /* ---------- スマホ ---------- */
 

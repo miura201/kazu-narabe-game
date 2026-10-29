@@ -8,21 +8,23 @@
 
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js';
 import {
-  initializeAuth, browserSessionPersistence, browserLocalPersistence, browserPopupRedirectResolver,
-  setPersistence, signInAnonymously, signInWithPopup, signOut, GoogleAuthProvider, onAuthStateChanged,
+  initializeAuth, browserLocalPersistence, browserSessionPersistence, browserPopupRedirectResolver,
+  signInAnonymously, signInWithPopup, signOut, GoogleAuthProvider, onAuthStateChanged,
 } from 'https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js';
 import {
-  getDatabase, ref, get, update as dbUpdate, push, onValue, runTransaction,
+  getDatabase, ref, get, set, update as dbUpdate, push, onValue, onDisconnect, runTransaction,
 } from 'https://www.gstatic.com/firebasejs/12.4.0/firebase-database.js';
 import { firebaseConfig } from './firebase-config.js';
 
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
-// 匿名ログインはタブごと（同じPCで複数タブを開けば別の参加者になる）。
-// Google ログインはブラウザに保存して、次に開いたときもログインしたままにする。
+// ログイン状態はブラウザに保存する。タブを閉じたりスマホでページが消えたりしても、
+// 同じブラウザで開き直せば同じ参加者として戻れる。
+// ローカル確認（localhost）のときだけはタブごとに別の参加者にして、1台で複数人の動きを試せるようにする。
+const isLocalDev = location.hostname === 'localhost';
 const auth = initializeAuth(app, {
-  persistence: [browserSessionPersistence, browserLocalPersistence],
+  persistence: isLocalDev ? browserSessionPersistence : browserLocalPersistence,
   popupRedirectResolver: browserPopupRedirectResolver,
 });
 
@@ -106,16 +108,32 @@ export const store = {
   subscribeValues(id, cb, onError) {
     return onValue(roomRef(id, 'values'), (snap) => cb(snap.val() ?? {}), onError);
   },
+
+  // 自分がオンラインであることを知らせる。通信が切れたら Firebase が自動で消してくれる
+  announcePresence(id, uid) {
+    const mine = roomRef(id, `presence/${uid}`);
+    return onValue(ref(db, '.info/connected'), async (snap) => {
+      if (snap.val() !== true) return;
+      try {
+        await onDisconnect(mine).remove();
+        await set(mine, true);
+      } catch (err) {
+        console.warn('オンライン表示を書き込めませんでした（セキュリティルールを確認）', err);
+      }
+    });
+  },
+
+  // 読めないとき（ルール未設定など）は null のまま＝全員オンライン扱いにする
+  subscribePresence(id, cb) {
+    return onValue(roomRef(id, 'presence'), (snap) => cb(snap.val() ?? {}), () => cb(null));
+  },
 };
 
 export const account = {
   // ログイン状態が分かるまで待ち、誰もログインしていなければ匿名でログインする
   async ready() {
     await auth.authStateReady();
-    if (!auth.currentUser) {
-      await setPersistence(auth, browserSessionPersistence);
-      await signInAnonymously(auth);
-    }
+    if (!auth.currentUser) await signInAnonymously(auth);
     return auth.currentUser;
   },
 
@@ -128,13 +146,11 @@ export const account = {
   },
 
   async loginWithGoogle() {
-    await setPersistence(auth, browserLocalPersistence);
     await signInWithPopup(auth, new GoogleAuthProvider());
   },
 
   async logout() {
     await signOut(auth);
-    await setPersistence(auth, browserSessionPersistence);
     await signInAnonymously(auth);
   },
 

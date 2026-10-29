@@ -5,6 +5,7 @@ import {
 } from './logic.js';
 import { TOPIC_MODES, FREE_ID, topicsFor } from './topics.js';
 import { setupDrag } from './drag.js';
+import { sound, confetti } from './effects.js';
 
 const GAME_TITLE = 'かずならべ';
 const SPIN_FRESH_MS = 4000; // これより古いルーレットは、あとから入った人には演出せず結果だけ見せる
@@ -22,6 +23,9 @@ let myHand = {}; // 自分の手札の数字 { カードID: 数字 }
 let unsubHand = null;
 let values = {}; // 答え合わせ中に読める全カードの数字
 let unsubValues = null;
+let online = null; // いまオンラインの人 { uid: true }。読み込み前は null
+let unsubPresence = null;
+let unsubAnnounce = null;
 let dragging = false;
 let composing = false;
 let renderQueued = false;
@@ -203,11 +207,13 @@ function enterRoom() {
         <div class="logo small">${GAME_TITLE}<small>（仮）</small></div>
         <div class="topbar-right">
           <span class="room-code">部屋 <b>${esc(roomId)}</b></span>
+          <button class="btn ghost" data-action="toggle-sound" id="sound-btn" title="効果音のオン・オフ">${sound.muted ? '🔇' : '🔊'}</button>
           <button class="btn ghost" data-action="copy-invite">招待リンクをコピー</button>
           <button class="btn ghost" data-action="open-history" id="history-btn" hidden>履歴</button>
         </div>
       </header>
       <section id="players" class="players"></section>
+      <section id="notice"></section>
       <section id="topic" class="topic-bar"></section>
       <section id="stage" class="stage"></section>
       <section id="controls" class="controls"></section>
@@ -223,7 +229,16 @@ function enterRoom() {
     myHand = hand;
     if (state) requestRender();
   });
+  unsubAnnounce?.();
+  unsubAnnounce = store.announcePresence(roomId, pid);
+  unsubPresence?.();
+  unsubPresence = store.subscribePresence(roomId, (p) => {
+    online = p;
+    if (state) requestRender();
+  });
 }
+
+const isOnline = (id) => online === null || !!online[id];
 
 // 答え合わせ中だけ全カードの数字を読み込む
 function syncValues() {
@@ -271,6 +286,7 @@ function render() {
   startSpinIfNew();
   document.getElementById('history-btn').hidden = !isHost();
   patch(document.getElementById('players'), playersHtml());
+  patch(document.getElementById('notice'), noticeHtml());
   const topicEl = document.getElementById('topic');
   topicEl.hidden = state.phase === 'lobby';
   patch(topicEl, state.phase === 'lobby' ? '' : topicHtml());
@@ -278,13 +294,51 @@ function render() {
   patch(document.getElementById('controls'), controlsHtml());
   if (historyOpen && !isHost()) actions['close-history']();
   saveHistoryIfDone();
+  runEffects();
   if (state.phase !== 'reveal') lastRevealCount = 0;
   else lastRevealCount = state.reveal?.count ?? 0;
+}
+
+// 状態の変化に合わせて効果音・演出を出す。開いた直後（途中参加や再読み込み）は鳴らさない
+let fx = null;
+function runEffects() {
+  const s = state;
+  const played = Object.values(s.cards).filter((c) => c.played).length;
+  const count = s.reveal?.count ?? 0;
+  const done = s.phase === 'reveal' && s.reveal?.direction && count >= s.line.length && valuesReady();
+  if (fx && fx.round === s.round) {
+    if (s.phase === 'playing' && played > fx.played) sound.pop();
+    if (s.phase === 'reveal' && count > fx.count) {
+      sound.flip();
+      const nums = s.line.map(valueOf);
+      const idx = revealOrder(s.line.length, s.reveal.direction)[count - 1];
+      if (valuesReady() && liveWrong(nums, s.reveal.direction, count).has(idx)) setTimeout(() => sound.wrong(), 160);
+    }
+    if (done && fx.doneRound !== s.round) {
+      const ok = isSuccess(s.line.map(valueOf));
+      setTimeout(() => {
+        if (ok) {
+          sound.success();
+          confetti();
+        } else {
+          sound.fail();
+        }
+      }, 500);
+    }
+  }
+  fx = {
+    round: s.round,
+    played,
+    count,
+    doneRound: done ? s.round : fx?.round === s.round ? fx.doneRound : 0,
+  };
 }
 
 function goHome() {
   unsubscribe?.();
   unsubHand?.();
+  unsubAnnounce?.();
+  unsubPresence?.();
   roomId = null;
   window.history.replaceState(null, '', location.pathname);
   renderEntry({ mode: 'create' });
@@ -300,13 +354,27 @@ function playersHtml() {
     const left = hand.filter((c) => !c.played).length;
     const status = !inGame ? '' : hand.length === 0 ? '<span class="chip-sub">観戦</span>'
       : left > 0 ? `<span class="chip-sub">手札${left}枚</span>` : '<span class="chip-sub done">出しきり</span>';
-    const remove = isHost() && (s.phase === 'lobby' || s.phase === 'topic') && p.id !== pid
+    // ゲーム中に外せるのはオフラインの人だけ（答え合わせ中は外せない）
+    const canRemove = s.phase === 'lobby' || s.phase === 'topic' || (s.phase === 'playing' && !isOnline(p.id));
+    const remove = isHost() && canRemove && p.id !== pid
       ? `<button class="chip-x" data-action="remove-player" data-id="${p.id}" title="部屋から外す">×</button>` : '';
-    return `<span class="chip ${p.id === pid ? 'me' : ''}">
+    return `<span class="chip ${p.id === pid ? 'me' : ''} ${isOnline(p.id) ? '' : 'offline'}">
+      <span class="dot" title="${isOnline(p.id) ? 'オンライン' : 'オフライン'}"></span>
       ${p.id === s.hostId ? '<span class="crown" title="ホスト">👑</span>' : ''}
       ${esc(p.name)}${p.id === pid ? '<span class="chip-sub">あなた</span>' : ''}${status}${remove}
     </span>`;
   }).join('') + `<span class="players-count">${Object.keys(s.players).length}/${MAX_PLAYERS}人</span>`;
+}
+
+// ホストの通信が切れたときに、他の人が引き継げるようにする
+function noticeHtml() {
+  const s = state;
+  if (isHost() || isOnline(s.hostId)) return '';
+  return `
+    <div class="notice">
+      <span>ホストの <b>${esc(nameOf(s, s.hostId))}</b> さんの接続が切れています</span>
+      <button class="btn small" data-action="take-host">ホストを引き継ぐ</button>
+    </div>`;
 }
 
 // ---------- お題 ----------
@@ -341,9 +409,11 @@ function startSpinIfNew() {
     i++;
     if (i >= steps) {
       spinAnim = null;
+      sound.decide();
       requestRender();
       return;
     }
+    sound.tick();
     spinAnim.text = i === steps - 1 ? spin.result : items[i % items.length];
     const el = document.getElementById('reel-text');
     if (el) {
@@ -552,7 +622,7 @@ function stagingHtml() {
   const cards = s.staging.map((id) => cardHtml(s.cards[id], { draggable: true })).join('');
   return `
     <div class="zone staging-zone" data-zone="staging">
-      <div class="zone-head"><span class="zone-title">待機エリア</span><span class="hint">出されたカードはここに来ます。ドラッグして列に入れてください</span></div>
+      <div class="zone-head"><span class="zone-title">待機エリア</span><span class="hint">ドラッグして列に入れてください。カードをタップするとひとことを大きく表示します</span></div>
       <div class="card-row">${cards || '<p class="zone-empty">まだカードはありません</p>'}</div>
     </div>`;
 }
@@ -800,11 +870,33 @@ const actions = {
   },
 
   'remove-player'(el) {
+    const id = el.dataset.id;
+    if (state.phase === 'playing'
+        && !window.confirm(`${nameOf(state, id)} さんを外しますか？（その人のカードは場から取り除かれます）`)) return;
     update((s) => {
-      delete s.players[el.dataset.id];
-      delete s.topic.submissions[el.dataset.id];
-      delete s.topic.votes[el.dataset.id];
+      if (s.phase === 'reveal') return undefined;
+      delete s.players[id];
+      delete s.topic.submissions[id];
+      delete s.topic.votes[id];
+      // その人のカードを場から取り除く
+      const removed = new Set(Object.values(s.cards).filter((c) => c.owner === id).map((c) => c.id));
+      removed.forEach((cid) => delete s.cards[cid]);
+      s.line = s.line.filter((cid) => !removed.has(cid));
+      s.staging = s.staging.filter((cid) => !removed.has(cid));
       return advanceTopic(s);
+    });
+  },
+
+  'toggle-sound'(el) {
+    sound.setMuted(!sound.muted);
+    el.textContent = sound.muted ? '🔇' : '🔊';
+  },
+
+  'take-host'() {
+    update((s) => {
+      if (s.hostId === pid || !s.players[pid]) return undefined;
+      s.hostId = pid;
+      return s;
     });
   },
 
@@ -1011,7 +1103,31 @@ const changes = {
   },
 };
 
+// 場のカードをタップすると、名前とひとことの全文を大きく表示する
+let lastDragEnd = 0;
+function showCardDetail(cardEl) {
+  const card = state?.cards[cardEl.dataset.card];
+  if (!card) return;
+  const faceUp = cardEl.classList.contains('face');
+  const el = document.createElement('div');
+  el.className = 'card-detail-back';
+  el.innerHTML = `
+    <div class="card-detail">
+      <div class="detail-owner">${esc(nameOf(state, card.owner))} さんのカード</div>
+      ${faceUp ? `<div class="detail-num">${valueOf(card.id) ?? '…'}</div>` : ''}
+      <div class="detail-word">${esc(card.word)}</div>
+      <button class="btn">閉じる</button>
+    </div>`;
+  el.addEventListener('click', () => el.remove());
+  document.body.appendChild(el);
+}
+
 app.addEventListener('click', (e) => {
+  const cardEl = e.target.closest('.card[data-card]');
+  if (cardEl && !e.target.closest('[data-action]')) {
+    if (Date.now() - lastDragEnd > 300) showCardDetail(cardEl);
+    return;
+  }
   const el = e.target.closest('[data-action]');
   if (!el || el.disabled) return;
   // モーダルの外側（暗い部分）をクリックしたときだけ閉じる
@@ -1041,6 +1157,7 @@ document.addEventListener('compositionend', () => {
 setupDrag({
   onDragChange(on) {
     dragging = on;
+    if (!on) lastDragEnd = Date.now();
     if (!on && renderQueued) requestRender();
   },
   onDrop(id, zone, index) {
