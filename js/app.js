@@ -54,7 +54,8 @@ const valueOf = (id) => values[id] ?? myHand[id] ?? null;
 const valuesReady = () => state.line.every((id) => values[id] != null);
 const isHost = () => state?.hostId === pid;
 const update = (fn) => store.update(roomId, fn);
-const inviteUrl = () => `${location.origin}${location.pathname}?room=${roomId}`;
+// openExternalBrowser=1 は、LINE で開いたときに LINE 内ではなく普段のブラウザで開かせる指定
+const inviteUrl = () => `${location.origin}${location.pathname}?room=${roomId}&openExternalBrowser=1`;
 
 function toast(text) {
   const el = document.createElement('div');
@@ -87,7 +88,7 @@ function patch(el, html) {
 // ---------- 入室 ----------
 
 function renderEntry({ mode, error = '' }) {
-  const saved = localStorage.getItem('knr:lastName') ?? '';
+  const saved = safeStorage.get('knr:lastName') ?? '';
   app.innerHTML = `
     <main class="entry">
       <h1 class="logo">${GAME_TITLE}<small>（仮）</small></h1>
@@ -123,11 +124,43 @@ function renderEntry({ mode, error = '' }) {
     e.preventDefault();
     const name = input.value.trim();
     if (!name) return;
-    localStorage.setItem('knr:lastName', name);
-    if (mode === 'join') await joinRoom(name);
-    else await createRoom(name);
+    safeStorage.set('knr:lastName', name);
+    const button = e.target.querySelector('button[type=submit]');
+    button.disabled = true;
+    button.textContent = '接続中…';
+    // 失敗しても「押しても何も起きない」にならないよう、理由を画面に出す
+    try {
+      await withTimeout(mode === 'join' ? joinRoom(name) : createRoom(name), 15000);
+    } catch (err) {
+      const reason = err.message === 'timeout'
+        ? '接続に時間がかかっています。通信環境を確認して、もう一度押してください'
+        : `うまくいきませんでした（${err.code ?? err.message}）`;
+      renderEntry({ mode, error: reason });
+    }
   });
 }
+
+function withTimeout(promise, ms) {
+  return Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms))]);
+}
+
+// プライベートモードなどで保存が禁止されていても止まらないようにする
+const safeStorage = {
+  get(key) {
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  },
+  set(key, value) {
+    try {
+      localStorage.setItem(key, value);
+    } catch {
+      // 保存できなくても続ける
+    }
+  },
+};
 
 function googleBoxHtml() {
   if (account.isGoogle) {
