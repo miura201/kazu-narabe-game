@@ -54,6 +54,7 @@ button, input, select { font: inherit; color: inherit; }
 .btn.primary:hover:not(:disabled) { background: var(--accent-dark); }
 .btn.ghost { border-color: var(--line); box-shadow: none; background: transparent; font-weight: 400; }
 .btn.ghost:hover { background: var(--paper); }
+.btn.ghost.danger { color: var(--wrong); }
 .btn.big { padding: 12px 28px; font-size: 1.1rem; }
 .btn.small { padding: 4px 12px; font-size: .85rem; box-shadow: 0 2px 0 var(--ink); }
 
@@ -499,6 +500,39 @@ input:focus, select:focus { outline: none; border-color: var(--indigo); }
   border-radius: 999px;
   z-index: 2000;
   animation: pulse .2s;
+}
+
+/* ---------- カードが出されたときの知らせ ---------- */
+
+.play-banner {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2500;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 800;
+  font-size: 1.15rem;
+  padding: 12px 24px;
+  border-radius: 999px;
+  border: 3px solid #fff;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, .25);
+  max-width: calc(100% - 32px);
+  text-align: center;
+  animation: banner-in 2.8s ease forwards;
+}
+@keyframes banner-in {
+  0% { opacity: 0; transform: translate(-50%, -30px) scale(.9); }
+  10% { opacity: 1; transform: translate(-50%, 0) scale(1.05); }
+  15% { transform: translate(-50%, 0) scale(1); }
+  85% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -10px); }
+}
+.card.fresh { animation: fresh 0.9s ease-in-out 4 alternate; }
+@keyframes fresh {
+  from { box-shadow: 0 0 0 2px var(--indigo-dark), 0 0 0 0 rgba(255, 107, 87, .8); transform: translateY(0); }
+  to { box-shadow: 0 0 0 2px var(--indigo-dark), 0 0 0 10px rgba(255, 107, 87, .3); transform: translateY(-4px); }
 }
 
 /* ---------- 紙吹雪 ---------- */

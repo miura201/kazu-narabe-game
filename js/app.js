@@ -243,6 +243,8 @@ function enterRoom() {
           <button class="btn ghost" data-action="toggle-sound" id="sound-btn" title="効果音のオン・オフ">${sound.muted ? '🔇' : '🔊'}</button>
           <button class="btn ghost" data-action="copy-invite">招待リンクをコピー</button>
           <button class="btn ghost" data-action="open-history" id="history-btn" hidden>履歴</button>
+          <button class="btn ghost danger" data-action="dissolve" id="dissolve-btn" hidden>解散</button>
+          <button class="btn ghost danger" data-action="leave" id="leave-btn" hidden>退出</button>
         </div>
       </header>
       <section id="players" class="players"></section>
@@ -302,7 +304,9 @@ function requestRender() {
 
 function render() {
   if (!state) {
-    renderMessage('部屋が見つかりません', 'この部屋はなくなったようです。', { label: 'トップへ', onClick: goHome });
+    stopRoomListeners();
+    if (roomId) store.leavePresence(roomId, pid).catch(() => {});
+    renderMessage('部屋が解散されました', 'ホストが部屋を解散したか、部屋がなくなりました。', { label: 'トップへ', onClick: goHome });
     return;
   }
   if (!state.players[pid]) {
@@ -318,6 +322,8 @@ function render() {
   syncValues();
   startSpinIfNew();
   document.getElementById('history-btn').hidden = !isHost();
+  document.getElementById('dissolve-btn').hidden = !isHost();
+  document.getElementById('leave-btn').hidden = isHost();
   patch(document.getElementById('players'), playersHtml());
   patch(document.getElementById('notice'), noticeHtml());
   const topicEl = document.getElementById('topic');
@@ -336,13 +342,17 @@ function render() {
 
 // 状態の変化に合わせて効果音・演出を出す。開いた直後（途中参加や再読み込み）は鳴らさない
 let fx = null;
+const freshCards = new Map(); // 出されたばかりのカード { カードID: 光らせ終わる時刻 }
+const FRESH_MS = 4000;
+
 function runEffects() {
   const s = state;
-  const played = Object.values(s.cards).filter((c) => c.played).length;
+  const played = Object.values(s.cards).filter((c) => c.played).map((c) => c.id);
   const count = s.reveal?.count ?? 0;
   const done = s.phase === 'reveal' && s.reveal?.direction && count >= s.line.length && valuesReady();
   if (fx && fx.round === s.round) {
-    if (s.phase === 'playing' && played > fx.played) sound.pop();
+    const newly = played.filter((id) => !fx.played.has(id));
+    if (s.phase === 'playing' && newly.length) announcePlayed(newly);
     if (s.phase === 'reveal' && count > fx.count) {
       sound.flip();
       const nums = s.line.map(valueOf);
@@ -363,17 +373,48 @@ function runEffects() {
   }
   fx = {
     round: s.round,
-    played,
+    played: new Set(played),
     count,
     doneRound: done ? s.round : fx?.round === s.round ? fx.doneRound : 0,
   };
 }
 
-function goHome() {
+// 誰かがカードを出したら、画面上部に大きく知らせて、そのカードをしばらく光らせる
+function announcePlayed(ids) {
+  sound.pop();
+  const owners = [...new Set(ids.map((id) => state.cards[id]?.owner))];
+  const who = owners.map((o) => (o === pid ? 'あなた' : `${nameOf(state, o)} さん`)).join('、');
+  banner(`🃏 ${who}がカードを出しました！`);
+  const until = Date.now() + FRESH_MS;
+  ids.forEach((id) => freshCards.set(id, until));
+  setTimeout(requestRender, 0);
+  setTimeout(requestRender, FRESH_MS + 50);
+}
+
+function banner(text) {
+  document.querySelector('.play-banner')?.remove();
+  const el = document.createElement('div');
+  el.className = 'play-banner';
+  el.textContent = text;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2800);
+}
+
+const isFresh = (id) => (freshCards.get(id) ?? 0) > Date.now();
+
+function stopRoomListeners() {
   unsubscribe?.();
   unsubHand?.();
   unsubAnnounce?.();
   unsubPresence?.();
+  unsubValues?.();
+  unsubscribe = unsubHand = unsubAnnounce = unsubPresence = unsubValues = null;
+  state = null;
+  fx = null;
+}
+
+function goHome() {
+  stopRoomListeners();
   roomId = null;
   window.history.replaceState(null, '', location.pathname);
   renderEntry({ mode: 'create' });
@@ -641,7 +682,7 @@ function lineHtml() {
   const playing = s.phase === 'playing';
   let inner;
   if (playing) {
-    inner = s.line.map((id) => cardHtml(s.cards[id], { draggable: true })).join('');
+    inner = s.line.map((id) => cardHtml(s.cards[id], { draggable: true, classes: isFresh(id) ? 'fresh' : '' })).join('');
   } else {
     const { direction, count } = s.reveal;
     const ready = valuesReady();
@@ -675,7 +716,7 @@ function lineHtml() {
 
 function stagingHtml() {
   const s = state;
-  const cards = s.staging.map((id) => cardHtml(s.cards[id], { draggable: true })).join('');
+  const cards = s.staging.map((id) => cardHtml(s.cards[id], { draggable: true, classes: isFresh(id) ? 'fresh' : '' })).join('');
   return `
     <div class="zone staging-zone" data-zone="staging">
       <div class="zone-head"><span class="zone-title">待機エリア</span><span class="hint">ドラッグして列に入れてください。カードをタップするとひとことを大きく表示します</span></div>
@@ -935,24 +976,27 @@ const actions = {
     const id = el.dataset.id;
     if (state.phase === 'playing'
         && !window.confirm(`${nameOf(state, id)} さんを外しますか？（その人のカードは場から取り除かれます）`)) return;
-    update((s) => {
-      if (s.phase === 'reveal') return undefined;
-      // お題番の人を外したら、次の人にお題番を回す
-      if (s.topic.chooser === id) {
-        const next = nextChooser(s, id);
-        s.topic.chooser = next === id ? null : next;
-        s.lastChooser = s.topic.chooser;
-      }
-      delete s.players[id];
-      delete s.topic.submissions[id];
-      delete s.topic.votes[id];
-      // その人のカードを場から取り除く
-      const removed = new Set(Object.values(s.cards).filter((c) => c.owner === id).map((c) => c.id));
-      removed.forEach((cid) => delete s.cards[cid]);
-      s.line = s.line.filter((cid) => !removed.has(cid));
-      s.staging = s.staging.filter((cid) => !removed.has(cid));
-      return advanceTopic(s);
-    });
+    update((s) => (s.phase === 'reveal' ? undefined : removePlayer(s, id)));
+  },
+
+  async dissolve() {
+    if (!window.confirm('部屋を解散しますか？（全員がトップ画面に戻ります）')) return;
+    const id = roomId;
+    stopRoomListeners();
+    await store.leavePresence(id, pid);
+    await store.deleteRoom(id);
+    goHome();
+    toast('部屋を解散しました');
+  },
+
+  async leave() {
+    if (!window.confirm('この部屋から退出しますか？')) return;
+    const id = roomId;
+    stopRoomListeners();
+    await store.update(id, (s) => removePlayer(s, pid));
+    await store.leavePresence(id, pid);
+    goHome();
+    toast('部屋から退出しました');
   },
 
   'toggle-sound'(el) {
@@ -1146,6 +1190,28 @@ function backToLobby(s) {
   s.reveal = null;
   s.topic = newTopic();
   return s;
+}
+
+// 部屋から1人抜ける（ホストが外す・本人が退出する）。
+// 答え合わせ中はカードを場に残して名前だけ抜け、それ以外はその人のカードも取り除く
+function removePlayer(s, id) {
+  if (!s.players[id]) return undefined;
+  // お題番の人が抜けたら、次の人にお題番を回す
+  if (s.topic.chooser === id) {
+    const next = nextChooser(s, id);
+    s.topic.chooser = next === id ? null : next;
+    s.lastChooser = s.topic.chooser;
+  }
+  delete s.players[id];
+  delete s.topic.submissions[id];
+  delete s.topic.votes[id];
+  if (s.phase !== 'reveal') {
+    const removed = new Set(Object.values(s.cards).filter((c) => c.owner === id).map((c) => c.id));
+    removed.forEach((cid) => delete s.cards[cid]);
+    s.line = s.line.filter((cid) => !removed.has(cid));
+    s.staging = s.staging.filter((cid) => !removed.has(cid));
+  }
+  return advanceTopic(s);
 }
 
 // 全員がお題を入力したら投票へ、全員が投票したら集計へ自動で進む

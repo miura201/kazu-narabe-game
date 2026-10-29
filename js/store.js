@@ -127,6 +127,15 @@ export const store = {
   },
 
   // 読めないとき（ルール未設定など）は null のまま＝全員オンライン扱いにする
+  async leavePresence(id, uid) {
+    await set(roomRef(id, `presence/${uid}`), null);
+  },
+
+  // 部屋を解散する（ホストだけ）。部屋の状態・手札・数字を消す
+  async deleteRoom(id) {
+    await dbUpdate(ref(db, `rooms/${id}`), { state: null, hands: null, values: null });
+  },
+
   subscribePresence(id, cb) {
     return onValue(roomRef(id, 'presence'), (snap) => cb(snap.val() ?? {}), () => cb(null));
   },
