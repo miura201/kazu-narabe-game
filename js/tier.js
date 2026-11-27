@@ -7,7 +7,8 @@ import { tierOptionsFor } from './tier-topics.js';
 
 const ADD_LIMIT_PRESET = 2; // 用意した選択肢があるお題で、1人が追加できる数（並べる人は無制限）
 const ADD_LIMIT_FREE = 5; // 自由入力のお題で、1人が追加できる数
-const MAX_OPTIONS = 20;
+// 選択肢の数で難しさが変わらないよう、毎回ちょうどこの数から選ぶ。足したいときは枠を空けて入れ替える
+const OPTION_COUNT = 10;
 
 // お題が決まったら Tier表のゲームを始める。お題番がそのまま並べる人になる
 export function startTier(s) {
@@ -195,11 +196,19 @@ export function createTier(ctx) {
     const opts = optionList();
     const mine = opts.filter((o) => o.by === me()).length;
     const limit = t.free ? ADD_LIMIT_FREE : ADD_LIMIT_PRESET;
-    const canAdd = (isRanker() || mine < limit) && opts.length < MAX_OPTIONS;
+    const canAdd = (isRanker() || mine < limit) && opts.length < OPTION_COUNT;
     const canDelete = (o) => isRanker() || ctx.isHost() || o.by === me();
-    const hint = isRanker()
-      ? 'みんなが選択肢を足せます。合わない選択肢は×で消せます'
-      : `選択肢を${limit}個まで足せます（あと${Math.max(0, limit - mine)}個）`;
+    const full = opts.length >= OPTION_COUNT;
+    let hint;
+    if (isRanker()) {
+      hint = full
+        ? `選択肢は${OPTION_COUNT}個です。入れ替えたいときは×で消すと、空いた枠にみんなが足せます`
+        : `あと${OPTION_COUNT - opts.length}個そろえてください`;
+    } else {
+      hint = full
+        ? `選択肢は${OPTION_COUNT}個です。足したいときは、並べる人に1つ消してもらいましょう`
+        : `空いた枠に選択肢を足せます（あなたはあと${Math.max(0, limit - mine)}個）`;
+    }
     return `
       <div class="panel">
         ${bannerHtml()}
@@ -337,8 +346,8 @@ export function createTier(ctx) {
     if (t.step === 'options') {
       const n = Object.keys(t.options).length;
       main = lead
-        ? `<button class="btn primary big" data-action="tier-close-options" ${n >= t.size ? '' : 'disabled'}>これで並べる</button>
-           ${n >= t.size ? '' : `<span class="hint">選択肢が${t.size}個以上必要です（いま${n}個）</span>`}`
+        ? `<button class="btn primary big" data-action="tier-close-options" ${n === OPTION_COUNT ? '' : 'disabled'}>これで並べる</button>
+           ${n === OPTION_COUNT ? '' : `<span class="hint">選択肢が${OPTION_COUNT}個そろうと押せます（いま${n}個）</span>`}`
         : `<span class="hint">${who(t.ranker)}が締め切ると、並べ始めます</span>`;
     } else if (t.step === 'ranking') {
       main = isRanker()
@@ -405,7 +414,7 @@ export function createTier(ctx) {
 
     'tier-close-options'() {
       ctx.update((s) => {
-        if (s.phase !== 'tier' || s.tier.step !== 'options' || Object.keys(s.tier.options).length < s.tier.size) return undefined;
+        if (s.phase !== 'tier' || s.tier.step !== 'options' || Object.keys(s.tier.options).length !== OPTION_COUNT) return undefined;
         s.tier.step = 'ranking';
         return s;
       });
@@ -500,7 +509,7 @@ export function createTier(ctx) {
         if (s.phase !== 'tier' || t.step !== 'options') return undefined;
         const list = Object.values(t.options);
         const limit = t.free ? ADD_LIMIT_FREE : ADD_LIMIT_PRESET;
-        if (list.length >= MAX_OPTIONS) return undefined;
+        if (list.length >= OPTION_COUNT) return undefined;
         if (t.ranker !== uid && list.filter((o) => o.by === uid).length >= limit) return undefined;
         if (list.some((o) => o.text === text)) return undefined; // 同じ選択肢は増やさない
         t.options[randomId()] = { text, by: uid, at: ctx.store.now() };
