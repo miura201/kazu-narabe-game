@@ -86,3 +86,20 @@ export function shiftLabel(shift) {
 export function isSuccess(values) {
   return values.every((v, i) => i === 0 || values[i - 1] < v);
 }
+
+// ---------- Tier表作成 ----------
+
+// 予想した1つの点数。answer は並べる人の答え（1位から順）、index はその予想を何位に置いたか（0 始まり）
+//   ◎ 順位までぴったり 3点 ／ ○ 1つずれ 2点 ／ △ 答えに入っているが2つ以上ずれ 1点 ／ × 入っていない 0点
+export function tierMark(answer, item, index) {
+  const at = answer.indexOf(item);
+  if (at < 0) return { mark: '×', points: 0 };
+  const d = Math.abs(at - index);
+  if (d === 0) return { mark: '◎', points: 3 };
+  if (d === 1) return { mark: '○', points: 2 };
+  return { mark: '△', points: 1 };
+}
+
+export function tierScore(answer, guess) {
+  return guess.reduce((sum, item, i) => sum + tierMark(answer, item, i).points, 0);
+}

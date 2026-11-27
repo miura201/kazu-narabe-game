@@ -144,3 +144,17 @@ export const TIER_GENRES = [
     ],
   },
 ];
+
+// お題選びのルーレット用（random は全ジャンル）
+export function tierTitlesFor(modeId) {
+  const genres = modeId === 'random' ? TIER_GENRES : TIER_GENRES.filter((g) => g.id === modeId);
+  return genres.flatMap((g) => g.topics.map((x) => x.title));
+}
+
+export function tierOptionsFor(title) {
+  for (const g of TIER_GENRES) {
+    const found = g.topics.find((x) => x.title === title);
+    if (found) return found.options;
+  }
+  return []; // 自由入力のお題は、選択肢をみんなで出し合う
+}

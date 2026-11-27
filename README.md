@@ -3,7 +3,7 @@
 お題を通して、みんなの価値観をのぞき合うブラウザゲーム集。
 
 - **数並べ**：数字をお題に沿った「ひとこと」で表現し、みんなで小さい順に並べる協力ゲーム
-- **Tier表作成**（準備中）：1人が選択肢を順位づけし、ほかの人がその並びを予想する
+- **Tier表作成**：1人が選択肢を順位づけし、ほかの人がその並びを予想する
 
 仕様は [SPEC.md](SPEC.md) を参照。
 
@@ -40,4 +40,6 @@ powershell -ExecutionPolicy Bypass -File serve.ps1
 | `database.rules.json` | Firebase のセキュリティルール |
 | `js/topics.js` | お題 |
 | `js/colors.js` | カードの色の選択肢 |
+| `js/tier.js` | Tier表作成の画面と操作 |
+| `js/tier-topics.js` | Tier表のお題と選択肢 |
 | `serve.ps1` | ローカル確認用の簡易サーバー |

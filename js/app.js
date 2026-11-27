@@ -7,6 +7,8 @@ import { TOPIC_MODES, FREE_ID, topicsFor } from './topics.js';
 import { setupDrag } from './drag.js';
 import { sound, confetti } from './effects.js';
 import { PALETTE, randomColor, isColor, isLight, DEFAULT_COLOR } from './colors.js';
+import { createTier, startTier, tierRemovePlayer } from './tier.js';
+import { tierTitlesFor } from './tier-topics.js';
 
 const GAME_TITLE = '価値観共有ゲーム';
 const SPIN_FRESH_MS = 4000; // これより古いルーレットは、あとから入った人には演出せず結果だけ見せる
@@ -378,8 +380,9 @@ function syncValues() {
       values = v;
       requestRender();
     }, () => {
-      // まだ答え合わせ中になっていない（読む許可がない）ときは、次の更新でやり直す
+      // まだ答え合わせ中になっていない（読む許可がない）ときは、少し待ってやり直す
       unsubValues = null;
+      setTimeout(requestRender, 1000);
     });
   } else if (unsubValues || Object.keys(values).length) {
     unsubValues?.();
@@ -415,6 +418,7 @@ function render() {
   if (!document.getElementById('stage')) enterRoom();
 
   syncValues();
+  tier.onRender();
   startSpinIfNew();
   patch(document.getElementById('players'), playersHtml());
   patch(document.getElementById('notice'), noticeHtml());
@@ -538,14 +542,15 @@ function playersHtml() {
     const status = !inGame ? '' : hand.length === 0 ? '<span class="chip-sub">観戦</span>'
       : left > 0 ? `<span class="chip-sub">手札${left}枚</span>` : '<span class="chip-sub done">出しきり</span>';
     // ゲーム中に外せるのはオフラインの人だけ（答え合わせ中は外せない）
-    const canRemove = s.phase === 'lobby' || s.phase === 'topic' || (s.phase === 'playing' && !isOnline(p.id));
+    const canRemove = s.phase === 'lobby' || s.phase === 'topic' || ((s.phase === 'playing' || s.phase === 'tier') && !isOnline(p.id));
     const remove = isHost() && canRemove && p.id !== pid
       ? `<button class="chip-x" data-action="remove-player" data-id="${p.id}" title="部屋から外す">×</button>` : '';
     return `<span class="chip ${p.id === pid ? 'me' : ''} ${isOnline(p.id) ? '' : 'offline'}" style="${colorAttrs(s, p.id).style}">
       <span class="dot" title="${isOnline(p.id) ? 'オンライン' : 'オフライン'}"></span>
       ${p.id === s.hostId ? '<span class="crown" title="ホスト">👑</span>' : ''}
       ${esc(p.name)}${p.id === pid ? '<span class="chip-sub">あなた</span>' : ''}${status}
-      ${s.phase === 'topic' && s.topic.chooser === p.id ? '<span class="chip-sub chooser">🎲お題番</span>' : ''}${remove}
+      ${s.phase === 'topic' && s.topic.chooser === p.id ? '<span class="chip-sub chooser">🎲お題番</span>' : ''}${tier.chipStatus(p.id)}
+      ${s.wins[p.id] ? `<span class="chip-sub wins" title="Tier表の勝ち数">🏆${s.wins[p.id]}</span>` : ''}${remove}
     </span>`;
   }).join('') + `<span class="players-count">${Object.keys(s.players).length}/${MAX_PLAYERS}人</span>`;
 }
@@ -661,6 +666,7 @@ function decideByVote(s) {
 function stageHtml() {
   const s = state;
   if (s.phase === 'lobby') return lobbyStageHtml();
+  if (s.phase === 'tier') return tier.stageHtml();
   if (s.phase === 'topic') {
     if (s.topic.step === 'input') return inputStageHtml();
     if (s.topic.step === 'vote') return voteStageHtml();
@@ -672,7 +678,7 @@ function stageHtml() {
 // 遊ぶゲームを選ぶ。選べるのはホスト
 const GAMES = [
   { id: 'kazu', icon: '🔢', name: '数並べ', desc: '配られた数字（1〜100）をお題に沿ったひとことで表して、みんなで小さい順に並べる協力ゲーム' },
-  { id: 'tier', icon: '🏆', name: 'Tier表作成', desc: '1人がお題の選択肢を順位づけ。ほかの人は、その人がどれをどの順に選んだかを予想する', soon: true },
+  { id: 'tier', icon: '🏆', name: 'Tier表作成', desc: '1人がお題の選択肢を順位づけ。ほかの人は、その人がどれをどの順に選んだかを予想する' },
 ];
 
 function lobbyStageHtml() {
@@ -700,7 +706,7 @@ function genreStageHtml() {
   return `
     <div class="panel">
       <div class="chooser-banner ${me ? 'me' : ''}">
-        🎲 今回のお題番：<b>${me ? 'あなた' : `${esc(nameOf(s, s.topic.chooser))} さん`}</b>
+        🎲 今回のお題番${s.game === 'tier' ? '（並べる人）' : ''}：<b>${me ? 'あなた' : `${esc(nameOf(s, s.topic.chooser))} さん`}</b>
       </div>
       <h3>ジャンルを選ぶ <span class="hint">${me ? '押すとルーレットが回ります。もう一度押すと回し直せます' : 'お題番の人が選びます'}</span></h3>
       <div class="genre-grid">
@@ -866,6 +872,7 @@ function resultHtml() {
 function controlsHtml() {
   const s = state;
   if (s.phase === 'lobby') return '';
+  if (s.phase === 'tier') return tier.controlsHtml();
   if (s.phase === 'topic') return isChooser() || isHost() ? topicControlsHtml() : topicWaitingHtml();
   if (s.phase === 'playing') return `${handHtml()}${isHost() ? hostPlayingHtml() : ''}`;
   return isHost() ? hostRevealHtml() : `<div class="panel waiting">${revealStatus()}</div>`;
@@ -884,11 +891,11 @@ function topicControlsHtml() {
   } else if (t.current) {
     // 枚数はお題を見てから決める。変えた枚数は次のゲームにも引き継ぐ
     main = `
-      <label class="per-player">1人
+      ${state.game === 'tier' ? '' : `<label class="per-player">1人
         <select data-change="per-player">
           ${[1, 2, 3].map((k) => `<option value="${k}" ${state.settings.perPlayer === k ? 'selected' : ''}>${k}枚</option>`).join('')}
         </select>
-      </label>
+      </label>`}
       <button class="btn primary big" data-action="begin-play" ${spinAnim ? 'disabled' : ''}>このお題で始める</button>
       ${t.step === 'choose' ? (isChooser() ? '<span class="hint">ジャンルを押すと回し直せます</span>' : '') : back}`;
   } else if (t.step === 'input') {
@@ -911,7 +918,7 @@ function topicControlsHtml() {
 function topicWaitingHtml() {
   const t = state.topic;
   const who = esc(nameOf(state, t.chooser));
-  if (t.current) return `<div class="panel waiting">${who} さんがゲームを始めるのを待っています…（1人${state.settings.perPlayer}枚）</div>`;
+  if (t.current) return `<div class="panel waiting">${who} さんがゲームを始めるのを待っています…${state.game === 'tier' ? '' : `（1人${state.settings.perPlayer}枚）`}</div>`;
   if (t.step === 'choose') return `<div class="panel waiting">お題番の ${who} さんがお題を選んでいます…</div>`;
   return '';
 }
@@ -1028,6 +1035,13 @@ function settingsHtml() {
           </div>
         </section>
         <section class="set-sec">
+          <h4>Tier表で並べる数 <span class="hint">次のゲームから反映されます</span></h4>
+          <select data-change="tier-count">
+            ${[3, 4, 5, 6, 7].map((k) => `<option value="${k}" ${s.settings.tierCount === k ? 'selected' : ''}>上位${k}つ</option>`).join('')}
+          </select>
+          ${Object.keys(s.wins).length ? '<button class="btn ghost" data-action="reset-wins">勝ち数をリセット</button>' : ''}
+        </section>
+        <section class="set-sec">
           <h4>ゲーム履歴</h4>
           <button class="btn" data-action="open-history">履歴を見る</button>
         </section>` : ''}
@@ -1120,7 +1134,33 @@ async function renderHistoryModal() {
 
 // ---------- 操作 ----------
 
+const tier = createTier({
+  state: () => state,
+  pid: () => pid,
+  roomId: () => roomId,
+  update,
+  store,
+  esc,
+  nameOf,
+  playersOf,
+  isHost,
+  colorAttrs,
+  banner,
+  toast,
+  sound,
+  confetti,
+  requestRender,
+});
+
 const actions = {
+  'reset-wins'() {
+    if (!window.confirm('Tier表の勝ち数を全員0に戻しますか？')) return;
+    update((s) => {
+      s.wins = {};
+      return s;
+    });
+  },
+
   async 'copy-invite'() {
     try {
       await navigator.clipboard.writeText(inviteUrl());
@@ -1189,10 +1229,11 @@ const actions = {
   },
 
   start(el) {
-    if (el.dataset.game !== 'kazu') return;
+    const game = el.dataset.game;
+    if (game !== 'kazu' && game !== 'tier') return;
     update((s) => {
       if (s.phase !== 'lobby' || Object.keys(s.players).length < MIN_PLAYERS) return undefined;
-      s.game = 'kazu';
+      s.game = game;
       const chooser = nextChooser(s, s.lastChooser);
       s.phase = 'topic';
       s.topic = newTopic(chooser);
@@ -1221,7 +1262,7 @@ const actions = {
       });
       return;
     }
-    const list = topicsFor(genre);
+    const list = state.game === 'tier' ? tierTitlesFor(genre) : topicsFor(genre);
     if (list.length === 0) return;
     const options = list.length > 1 ? list.filter((t) => t !== state.topic.current) : list;
     const pick = options[Math.floor(Math.random() * options.length)];
@@ -1275,6 +1316,10 @@ const actions = {
 
   // 数字を配れるのはホストだけ（セキュリティルール）。お題番が押したら合図を出し、ホストの画面が配る
   'begin-play'() {
+    if (state.game === 'tier') {
+      update((s) => (s.phase === 'topic' && s.topic.current ? startTier(s) : undefined));
+      return;
+    }
     if (isHost()) {
       dealAndStart();
       return;
@@ -1314,11 +1359,12 @@ const actions = {
 
   async 'next-game'() {
     await update(backToLobby);
-    store.clearDeal(roomId);
+    // 配った数字を消せるのはホストだけ（Tier表では並べる人も次へ進める）
+    if (isHost()) store.clearDeal(roomId);
   },
 
   async abort() {
-    if (state.phase !== 'topic' && !window.confirm('ゲームをやめてロビーに戻りますか？（配った数字はリセットされます）')) return;
+    if (state.phase !== 'topic' && !window.confirm('ゲームをやめてロビーに戻りますか？')) return;
     await update(backToLobby);
     store.clearDeal(roomId);
   },
@@ -1335,6 +1381,8 @@ const actions = {
     renderHistoryModal();
   },
 };
+
+Object.assign(actions, tier.actions);
 
 // 数字を配ってゲームを始める（ホストの画面だけが実行する）
 let dealing = false;
@@ -1370,6 +1418,7 @@ function backToLobby(s) {
   s.line = [];
   s.staging = [];
   s.reveal = null;
+  s.tier = null;
   s.topic = newTopic();
   return s;
 }
@@ -1385,6 +1434,7 @@ function removePlayer(s, id) {
     s.lastChooser = s.topic.chooser;
   }
   delete s.players[id];
+  if (!tierRemovePlayer(s, id)) backToLobby(s); // 並べる人が抜けたら、そのゲームは終わり
   delete s.topic.submissions[id];
   delete s.topic.votes[id];
   if (s.phase !== 'reveal') {
@@ -1430,6 +1480,8 @@ function submitTopic(text) {
 }
 
 const forms = {
+  ...tier.forms,
+
   'submit-topic'(form) {
     const input = form.querySelector('input');
     const text = input.value.trim();
@@ -1465,6 +1517,13 @@ const inputs = {
 };
 
 const changes = {
+  'tier-count'(el) {
+    update((s) => {
+      s.settings.tierCount = Math.min(7, Math.max(3, Number(el.value) || 5));
+      return s;
+    });
+  },
+
   // 手を離したら、その音量で試しに鳴らす
   volume() {
     sound.pop();

@@ -4,6 +4,8 @@
 //   rooms/{部屋}/state         … 全員が見られる部屋の状態（数字は入っていない）
 //   rooms/{部屋}/hands/{uid}   … その人の手札の数字。本人しか読めない
 //   rooms/{部屋}/values        … 全カードの数字。答え合わせ中だけ全員が読める
+//   rooms/{部屋}/tierAnswer    … Tier表で並べる人の答え。答え合わせまでは本人しか読めない
+//   rooms/{部屋}/tierGuesses/{uid} … Tier表の予想。答え合わせまでは本人しか読めない
 //   users/{uid}/history        … ゲーム履歴。本人（Google ログインしたホスト）しか読めない
 
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js';
@@ -62,6 +64,21 @@ function normalize(s) {
   s.lastChooser ??= null;
   if (s.topic.spin) s.topic.spin.items = toArray(s.topic.spin.items);
   s.reveal ??= null;
+  s.settings.tierCount ??= 5;
+  s.wins ??= {};
+  s.tier ??= null;
+  if (s.tier) {
+    s.tier.options ??= {};
+    s.tier.predictors = toArray(s.tier.predictors);
+    s.tier.submitted ??= {};
+    s.tier.count ??= 0;
+    s.tier.result ??= null;
+    if (s.tier.result) {
+      s.tier.result.scores ??= {};
+      s.tier.result.winners = toArray(s.tier.result.winners);
+      s.tier.result.perfect = toArray(s.tier.result.perfect);
+    }
+  }
   return s;
 }
 
@@ -136,9 +153,27 @@ export const store = {
     await set(roomRef(id, `presence/${uid}`), null);
   },
 
-  // 部屋を解散する（ホストだけ）。部屋の状態・手札・数字を消す
+  // 部屋を解散する（ホストだけ）。部屋の状態・手札・数字を消す（Tier表の答えは小さいので残る）
   async deleteRoom(id) {
     await dbUpdate(ref(db, `rooms/${id}`), { state: null, hands: null, values: null });
+  },
+
+  // Tier表の答え・予想。{ round, order: [選択肢ID…] } の形で保存する
+  async setTierAnswer(id, answer) {
+    await set(roomRef(id, 'tierAnswer'), answer);
+  },
+
+  async setTierGuess(id, uid, guess) {
+    await set(roomRef(id, `tierGuesses/${uid}`), guess);
+  },
+
+  // 答え合わせ中だけ読める。それ以外のときは onError が呼ばれる
+  subscribeTierAnswer(id, cb, onError) {
+    return onValue(roomRef(id, 'tierAnswer'), (snap) => cb(snap.val()), onError);
+  },
+
+  subscribeTierGuesses(id, cb, onError) {
+    return onValue(roomRef(id, 'tierGuesses'), (snap) => cb(snap.val() ?? {}), onError);
   },
 
   subscribePresence(id, cb) {
