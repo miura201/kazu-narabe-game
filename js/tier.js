@@ -338,7 +338,7 @@ export function createTier(ctx) {
       const n = Object.keys(t.options).length;
       main = lead
         ? `<button class="btn primary big" data-action="tier-close-options" ${n >= t.size ? '' : 'disabled'}>これで並べる</button>
-           <span class="hint">${n >= t.size ? `選択肢 ${n}個で締め切ります` : `選択肢が${t.size}個以上必要です（いま${n}個）`}</span>`
+           ${n >= t.size ? '' : `<span class="hint">選択肢が${t.size}個以上必要です（いま${n}個）</span>`}`
         : `<span class="hint">${who(t.ranker)}が締め切ると、並べ始めます</span>`;
     } else if (t.step === 'ranking') {
       main = isRanker()
