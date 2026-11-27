@@ -660,3 +660,13 @@ input:focus, select:focus { outline: none; border-color: var(--indigo); }
 .game-name { font-size: 1.3rem; font-weight: 800; display: flex; align-items: center; gap: 8px; }
 .game-desc { font-size: .85rem; color: var(--muted); line-height: 1.5; }
 .soon { font-size: .7rem; background: var(--muted); color: #fff; border-radius: 999px; padding: 1px 8px; font-weight: 700; }
+
+/* 使われている色（×印） */
+.swatch.taken { cursor: not-allowed; opacity: .45; }
+.swatch.taken::after { content: '×'; position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 1.1rem; text-shadow: 0 0 3px rgba(0, 0, 0, .8); }
+
+/* 音量のバー */
+.volume { display: flex; align-items: center; gap: 10px; max-width: 360px; }
+.volume input { flex: 1; accent-color: var(--accent); padding: 0; border: none; }
+.volume #volume-icon { font-size: 1.3rem; width: 1.6em; text-align: center; }
+.volume #volume-text { width: 3em; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }

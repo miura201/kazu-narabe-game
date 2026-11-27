@@ -91,11 +91,13 @@ function patch(el, html) {
 
 // 入室画面で選んでいるカードの色。前回の色を覚えておく
 let entryColor = null;
+let entryTaken = {}; // 参加しようとしている部屋で、ほかの人が使っている色 { 色: 名前 }
 
 function renderEntry({ mode, error = '' }) {
   const saved = safeStorage.get('knr:lastName') ?? '';
   const nameNow = document.getElementById('name-input')?.value;
   entryColor ??= isColor(safeStorage.get('knr:lastColor')) ? safeStorage.get('knr:lastColor') : randomColor();
+  if (mode === 'create') entryTaken = {};
   app.innerHTML = `
     <main class="entry">
       <h1 class="logo">${GAME_TITLE}</h1>
@@ -110,7 +112,7 @@ function renderEntry({ mode, error = '' }) {
           <span>カードの色</span>
           <div class="color-row">
             <span class="color-preview" id="color-preview">${previewCardHtml(entryColor)}</span>
-            ${colorPickerHtml(entryColor)}
+            ${colorPickerHtml(entryColor, entryTaken)}
           </div>
         </div>
         <button class="btn primary big" type="submit">${mode === 'join' ? '参加する' : '部屋を作る'}</button>
@@ -120,6 +122,7 @@ function renderEntry({ mode, error = '' }) {
     </main>`;
   const input = document.getElementById('name-input');
   input.focus();
+  if (mode === 'join') loadEntryTaken();
   document.getElementById('google-login')?.addEventListener('click', async () => {
     try {
       await account.loginWithGoogle();
@@ -155,14 +158,40 @@ function renderEntry({ mode, error = '' }) {
   });
 }
 
-// カードの色の選択肢（20色＋自分で作る色）
-function colorPickerHtml(selected) {
+// ほかの人が使っている色 { 色: 名前 }。好きな色（カスタム）は重なっても気にしない
+function takenColors(s, me) {
+  const taken = {};
+  Object.entries(s?.players ?? {}).forEach(([id, p]) => {
+    if (id !== me && PALETTE.some((c) => c.hex === p.color)) taken[p.color] = p.name;
+  });
+  return taken;
+}
+
+function freeColor(taken) {
+  const free = PALETTE.filter((c) => !taken[c.hex]);
+  return (free.length ? free[Math.floor(Math.random() * free.length)] : PALETTE[0]).hex;
+}
+
+// 参加する部屋の使用中の色を読み込み、色の選択肢に×を付ける
+async function loadEntryTaken() {
+  const room = await store.get(roomId).catch(() => null);
+  const form = document.getElementById('entry-form');
+  if (!room || !form) return;
+  entryTaken = takenColors(room, pid);
+  if (entryTaken[entryColor]) entryColor = freeColor(entryTaken);
+  form.querySelector('.color-picker').outerHTML = colorPickerHtml(entryColor, entryTaken);
+  document.getElementById('color-preview').innerHTML = previewCardHtml(entryColor);
+}
+
+// カードの色の選択肢（20色＋自分で作る色）。taken の色は×を付けて選べなくする
+function colorPickerHtml(selected, taken = {}) {
   const custom = !PALETTE.some((c) => c.hex === selected);
   return `
     <div class="color-picker">
-      ${PALETTE.map((c) => `
+      ${PALETTE.map((c) => (taken[c.hex] ? `
+        <span class="swatch taken" style="--pc:${c.hex}" title="${esc(taken[c.hex])} さんが使っています"></span>` : `
         <button type="button" class="swatch ${c.hex === selected ? 'selected' : ''}" style="--pc:${c.hex}"
-          data-action="pick-color" data-color="${c.hex}" title="${c.name}" aria-label="${c.name}"></button>`).join('')}
+          data-action="pick-color" data-color="${c.hex}" title="${c.name}" aria-label="${c.name}"></button>`)).join('')}
       <label class="swatch custom ${custom ? 'selected' : ''}" style="${custom ? `--pc:${selected}` : ''}" title="好きな色を作る">
         <input type="color" data-change="custom-color" value="${selected}" aria-label="好きな色を作る">
       </label>
@@ -179,16 +208,17 @@ function pickColor(hex) {
   safeStorage.set('knr:lastColor', hex);
   if (state?.players[pid]) {
     update((s) => {
-      if (!s.players[pid]) return undefined;
+      if (!s.players[pid] || takenColors(s, pid)[hex]) return undefined;
       s.players[pid].color = hex;
       return s;
     });
     return;
   }
+  if (entryTaken[hex]) return;
   entryColor = hex;
   const form = document.getElementById('entry-form');
   if (!form) return;
-  form.querySelector('.color-picker').outerHTML = colorPickerHtml(hex);
+  form.querySelector('.color-picker').outerHTML = colorPickerHtml(hex, entryTaken);
   document.getElementById('color-preview').innerHTML = previewCardHtml(hex);
 }
 
@@ -281,6 +311,13 @@ async function joinRoom(name) {
     if (s.players[pid]) return s;
     if (Object.keys(s.players).length >= MAX_PLAYERS) {
       error = `この部屋は満員です（最大${MAX_PLAYERS}人）`;
+      return undefined;
+    }
+    // 選んでいる間にほかの人が同じ色で入ったとき
+    const taken = takenColors(s, pid);
+    if (taken[entryColor]) {
+      entryTaken = taken;
+      error = `その色は ${taken[entryColor]} さんが使っています。別の色を選んでください`;
       return undefined;
     }
     s.players[pid] = { name, color: entryColor, joinedAt: store.now() };
@@ -950,6 +987,8 @@ const PLAY_STYLES = [
   { id: 'all', name: '一斉に公開', desc: '全員がひとことを書き終わるまで「？」で隠し、そろったら一気に表示して並べる' },
 ];
 
+const volumeIcon = (v) => (v === 0 ? '🔇' : v < 0.5 ? '🔉' : '🔊');
+
 function renderSettings() {
   patch(document.getElementById('settings'), settingsOpen && state ? settingsHtml() : '');
 }
@@ -967,12 +1006,16 @@ function settingsHtml() {
           <button class="btn ghost" data-action="close-settings">閉じる</button>
         </div>
         <section class="set-sec">
-          <h4>効果音</h4>
-          <button class="btn ${sound.muted ? '' : 'primary'}" data-action="toggle-sound">${sound.muted ? '🔇 オフ' : '🔊 オン'}</button>
+          <h4>効果音の音量</h4>
+          <label class="volume">
+            <span id="volume-icon">${volumeIcon(sound.volume)}</span>
+            <input type="range" min="0" max="100" step="5" value="${Math.round(sound.volume * 100)}" data-keep="volume" data-input="volume" data-change="volume" aria-label="効果音の音量">
+            <span id="volume-text">${Math.round(sound.volume * 100)}%</span>
+          </label>
         </section>
         <section class="set-sec">
           <h4>カードの色</h4>
-          <div class="color-row">${previewCardHtml(mine)}${colorPickerHtml(mine)}</div>
+          <div class="color-row">${previewCardHtml(mine)}${colorPickerHtml(mine, takenColors(s, pid))}</div>
         </section>
         ${host ? `
         <section class="set-sec">
@@ -1114,11 +1157,6 @@ const actions = {
     await store.leavePresence(id, pid);
     goHome();
     toast('部屋から退出しました');
-  },
-
-  'toggle-sound'() {
-    sound.setMuted(!sound.muted);
-    renderSettings();
   },
 
   'open-settings'() {
@@ -1416,7 +1454,22 @@ const forms = {
   },
 };
 
+// バーを動かしている間は画面を描き直さず、数字とアイコンだけ書き換える
+const inputs = {
+  volume(el) {
+    const v = Number(el.value) / 100;
+    sound.setVolume(v);
+    document.getElementById('volume-icon').textContent = volumeIcon(v);
+    document.getElementById('volume-text').textContent = `${el.value}%`;
+  },
+};
+
 const changes = {
+  // 手を離したら、その音量で試しに鳴らす
+  volume() {
+    sound.pop();
+  },
+
   'custom-color'(el) {
     pickColor(el.value);
   },
@@ -1468,6 +1521,11 @@ app.addEventListener('submit', (e) => {
   if (!form) return;
   e.preventDefault();
   forms[form.dataset.form]?.(form);
+});
+
+app.addEventListener('input', (e) => {
+  const el = e.target.closest('[data-input]');
+  if (el) inputs[el.dataset.input]?.(el);
 });
 
 app.addEventListener('change', (e) => {

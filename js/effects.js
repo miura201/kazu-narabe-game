@@ -1,12 +1,14 @@
 // 効果音と演出。音声ファイルは使わず、ブラウザの Web Audio で合成する。
 
-const MUTE_KEY = 'knr:muted';
+const VOLUME_KEY = 'knr:volume';
 let ctx = null;
-let muted = false;
+let volume = 0.7; // 0（消音）〜 1
 try {
-  muted = localStorage.getItem(MUTE_KEY) === '1';
+  const saved = localStorage.getItem(VOLUME_KEY);
+  if (saved !== null) volume = Math.min(1, Math.max(0, Number(saved) || 0));
+  else if (localStorage.getItem('knr:muted') === '1') volume = 0; // 以前のオン・オフ設定を引き継ぐ
 } catch {
-  // 保存できない環境では毎回オンから始める
+  // 保存できない環境では毎回同じ音量から始める
 }
 
 // スマホのブラウザは、画面に一度触れるまで音を鳴らせないので、最初の操作で準備する
@@ -23,7 +25,7 @@ document.addEventListener('keydown', unlock);
 
 // 1音を鳴らす。start は今からの秒数
 function tone({ freq, start = 0, dur = 0.12, type = 'sine', gain = 0.2, slideTo = null }) {
-  if (muted || !ctx || ctx.state !== 'running') return;
+  if (volume === 0 || !ctx || ctx.state !== 'running') return;
   const t = ctx.currentTime + start;
   const osc = ctx.createOscillator();
   const g = ctx.createGain();
@@ -31,7 +33,7 @@ function tone({ freq, start = 0, dur = 0.12, type = 'sine', gain = 0.2, slideTo 
   osc.frequency.setValueAtTime(freq, t);
   if (slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
   g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(gain, t + 0.01);
+  g.gain.exponentialRampToValueAtTime(gain * volume, t + 0.01);
   g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
   osc.connect(g).connect(ctx.destination);
   osc.start(t);
@@ -39,14 +41,14 @@ function tone({ freq, start = 0, dur = 0.12, type = 'sine', gain = 0.2, slideTo 
 }
 
 export const sound = {
-  get muted() {
-    return muted;
+  get volume() {
+    return volume;
   },
 
-  setMuted(value) {
-    muted = value;
+  setVolume(value) {
+    volume = Math.min(1, Math.max(0, value));
     try {
-      localStorage.setItem(MUTE_KEY, value ? '1' : '0');
+      localStorage.setItem(VOLUME_KEY, String(volume));
     } catch {
       // 保存できなくても、この画面の間は設定が効く
     }
