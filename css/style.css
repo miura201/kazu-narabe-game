@@ -144,6 +144,7 @@ input:focus, select:focus { outline: none; border-color: var(--indigo); }
   font-weight: 700;
 }
 .chip.me { border-color: var(--indigo); }
+.chip { box-shadow: inset 6px 0 0 var(--pc, transparent); padding-left: 16px; }
 .chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
 .chip.offline { opacity: .55; }
 .chip.offline .dot { background: var(--muted); }
@@ -323,14 +324,19 @@ input:focus, select:focus { outline: none; border-color: var(--indigo); }
   user-select: none;
   flex: none;
 }
+/* --pc はカードを出した人の色 */
+.card { --pc: var(--indigo); --pc-dark: color-mix(in srgb, var(--pc) 72%, #000); }
 .card.back {
   color: #fff;
   background:
-    radial-gradient(circle, rgba(255, 255, 255, .14) 1.5px, transparent 1.6px) 0 0 / 12px 12px,
-    linear-gradient(150deg, var(--indigo), var(--indigo-dark));
+    radial-gradient(circle, rgba(255, 255, 255, .16) 1.5px, transparent 1.6px) 0 0 / 12px 12px,
+    linear-gradient(150deg, var(--pc), var(--pc-dark));
   border: 3px solid #fff;
-  box-shadow: 0 0 0 2px var(--indigo-dark), 0 4px 8px rgba(0, 0, 0, .15);
+  box-shadow: 0 0 0 2px var(--pc-dark), 0 4px 8px rgba(0, 0, 0, .15);
 }
+.card.back.light { color: var(--ink); }
+.card.back.light .card-owner { background: rgba(255, 255, 255, .55); }
+.card.hidden-word .card-word { color: var(--muted); font-size: 1.1rem; }
 .card.face {
   background: #fff;
   border: 2px solid var(--ink);
@@ -359,7 +365,8 @@ input:focus, select:focus { outline: none; border-color: var(--indigo); }
   border-radius: 999px;
   padding: 1px 8px;
 }
-.card.face .card-owner { background: #f1ede4; color: var(--ink); }
+.card.face .card-owner { background: var(--pc); color: #fff; }
+.card.face.light .card-owner { color: var(--ink); }
 .card-mark { font-size: 1.8rem; font-weight: 800; opacity: .35; }
 .card-num { font-size: 2.2rem; font-weight: 800; line-height: 1; }
 .card-word {
@@ -380,8 +387,8 @@ input:focus, select:focus { outline: none; border-color: var(--indigo); }
   word-break: break-word;
 }
 .card.face .card-word { background: #f8f5ee; }
-.card.mine { justify-content: center; border-color: var(--accent); }
-.card.mine .card-num { color: var(--accent); }
+.card.mine { justify-content: center; border: 3px solid var(--pc); }
+.card.mine .card-num { color: var(--ink); }
 
 /* めくり・判定 */
 .card.flip-in { animation: flip .45s ease-out; }
@@ -581,3 +588,75 @@ input:focus, select:focus { outline: none; border-color: var(--indigo); }
   .hand-card { width: calc(50% - 8px); }
   .card-row { gap: 8px; }
 }
+
+/* ---------- カードの色 ---------- */
+
+.color-row { display: flex; gap: 12px; align-items: center; }
+.color-preview { flex: none; }
+.mini-card { --card-w: 46px; --card-h: 64px; justify-content: center; border-width: 2px; }
+.mini-card .card-mark { font-size: 1.3rem; }
+.color-picker { display: flex; flex-wrap: wrap; gap: 6px; }
+.swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  background: var(--pc);
+  box-shadow: 0 0 0 2px var(--line);
+  cursor: pointer;
+  padding: 0;
+  position: relative;
+}
+.swatch.selected { box-shadow: 0 0 0 3px var(--ink); }
+.swatch.custom { background: conic-gradient(#f43f5e, #f59e0b, #84cc16, #06b6d4, #6366f1, #d946ef, #f43f5e); }
+.swatch.custom[style*="--pc"] { background: var(--pc); }
+.swatch.custom::after { content: '＋'; position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-weight: 800; font-size: .8rem; text-shadow: 0 0 3px rgba(0, 0, 0, .6); }
+.swatch.custom input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; border: none; padding: 0; }
+
+/* ---------- 歯車の設定 ---------- */
+
+.btn.gear { font-size: 1.2rem; padding: 4px 12px; }
+.settings-modal { width: min(560px, 100%); }
+.set-sec { border-top: 2px solid var(--line); padding: 14px 0 4px; margin-top: 12px; }
+.set-sec h4 { margin: 0 0 10px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.style-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+.style-option {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  padding: 12px;
+  border: 2px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+  cursor: pointer;
+}
+.style-option span { font-size: .8rem; color: var(--muted); }
+.style-option.selected { border-color: var(--accent); background: #fff1ee; box-shadow: 0 3px 0 var(--accent); }
+.btn.danger-btn { color: var(--wrong); border-color: var(--wrong); box-shadow: 0 3px 0 var(--wrong); }
+.per-player { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; }
+
+/* ---------- ゲームを選ぶ ---------- */
+
+.game-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.game-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 20px 16px;
+  border: 2px solid var(--ink);
+  border-radius: var(--radius);
+  background: #fff;
+  box-shadow: 0 5px 0 var(--ink);
+  cursor: pointer;
+  transition: transform .08s, box-shadow .08s, background .15s;
+}
+.game-box:hover:not(:disabled) { background: #fff6ec; }
+.game-box:active:not(:disabled) { transform: translateY(5px); box-shadow: 0 0 0 var(--ink); }
+.game-box:disabled { cursor: default; color: var(--ink); }
+.game-box:disabled:has(.soon) { opacity: .55; box-shadow: 0 5px 0 var(--line); border-color: var(--line); }
+.game-icon { font-size: 2.4rem; line-height: 1.2; }
+.game-name { font-size: 1.3rem; font-weight: 800; display: flex; align-items: center; gap: 8px; }
+.game-desc { font-size: .85rem; color: var(--muted); line-height: 1.5; }
+.soon { font-size: .7rem; background: var(--muted); color: #fff; border-radius: 999px; padding: 1px 8px; font-weight: 700; }

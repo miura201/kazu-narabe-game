@@ -40,6 +40,11 @@ function toArray(v) {
 function normalize(s) {
   if (!s) return null;
   s.players ??= {};
+  s.settings ??= {};
+  s.settings.perPlayer ??= 2;
+  s.settings.playStyle ??= 'one'; // one: 1枚ずつ出す ／ all: 全員が書き終わったら一斉に公開
+  s.style ??= 'one'; // いま遊んでいるゲームの出し方（配ったときの設定）
+  s.wordsOpen ??= false;
   s.cards ??= {};
   s.line = toArray(s.line);
   s.staging = toArray(s.staging);

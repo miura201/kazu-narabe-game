@@ -6,8 +6,9 @@ import {
 import { TOPIC_MODES, FREE_ID, topicsFor } from './topics.js';
 import { setupDrag } from './drag.js';
 import { sound, confetti } from './effects.js';
+import { PALETTE, randomColor, isColor, isLight, DEFAULT_COLOR } from './colors.js';
 
-const GAME_TITLE = 'かずならべ';
+const GAME_TITLE = '価値観共有ゲーム';
 const SPIN_FRESH_MS = 4000; // これより古いルーレットは、あとから入った人には演出せず結果だけ見せる
 
 const app = document.getElementById('app');
@@ -33,6 +34,7 @@ let spinAnim = null; // { id, text }
 let lastSpinId = null;
 let lastRevealCount = 0;
 let historyOpen = false;
+let settingsOpen = false;
 
 // ---------- 共通 ----------
 
@@ -87,18 +89,30 @@ function patch(el, html) {
 
 // ---------- 入室 ----------
 
+// 入室画面で選んでいるカードの色。前回の色を覚えておく
+let entryColor = null;
+
 function renderEntry({ mode, error = '' }) {
   const saved = safeStorage.get('knr:lastName') ?? '';
+  const nameNow = document.getElementById('name-input')?.value;
+  entryColor ??= isColor(safeStorage.get('knr:lastColor')) ? safeStorage.get('knr:lastColor') : randomColor();
   app.innerHTML = `
     <main class="entry">
-      <h1 class="logo">${GAME_TITLE}<small>（仮）</small></h1>
-      <p class="tagline">数字をひとことで伝えて、みんなで小さい順に並べよう</p>
+      <h1 class="logo">${GAME_TITLE}</h1>
+      <p class="tagline">お題を通して、みんなの価値観をのぞいてみよう</p>
       <form class="entry-card" id="entry-form">
         ${mode === 'join' ? `<p class="entry-room">部屋 <b>${esc(roomId)}</b> に参加します</p>` : ''}
         <label class="field">
           <span>ユーザー名</span>
-          <input id="name-input" maxlength="12" autocomplete="off" required value="${esc(saved)}" placeholder="例：たろう">
+          <input id="name-input" maxlength="12" autocomplete="off" required value="${esc(nameNow ?? saved)}" placeholder="例：たろう">
         </label>
+        <div class="field">
+          <span>カードの色</span>
+          <div class="color-row">
+            <span class="color-preview" id="color-preview">${previewCardHtml(entryColor)}</span>
+            ${colorPickerHtml(entryColor)}
+          </div>
+        </div>
         <button class="btn primary big" type="submit">${mode === 'join' ? '参加する' : '部屋を作る'}</button>
         <p class="error">${esc(error)}</p>
       </form>
@@ -125,6 +139,7 @@ function renderEntry({ mode, error = '' }) {
     const name = input.value.trim();
     if (!name) return;
     safeStorage.set('knr:lastName', name);
+    safeStorage.set('knr:lastColor', entryColor);
     const button = e.target.querySelector('button[type=submit]');
     button.disabled = true;
     button.textContent = '接続中…';
@@ -138,6 +153,51 @@ function renderEntry({ mode, error = '' }) {
       renderEntry({ mode, error: reason });
     }
   });
+}
+
+// カードの色の選択肢（20色＋自分で作る色）
+function colorPickerHtml(selected) {
+  const custom = !PALETTE.some((c) => c.hex === selected);
+  return `
+    <div class="color-picker">
+      ${PALETTE.map((c) => `
+        <button type="button" class="swatch ${c.hex === selected ? 'selected' : ''}" style="--pc:${c.hex}"
+          data-action="pick-color" data-color="${c.hex}" title="${c.name}" aria-label="${c.name}"></button>`).join('')}
+      <label class="swatch custom ${custom ? 'selected' : ''}" style="${custom ? `--pc:${selected}` : ''}" title="好きな色を作る">
+        <input type="color" data-change="custom-color" value="${selected}" aria-label="好きな色を作る">
+      </label>
+    </div>`;
+}
+
+function previewCardHtml(color) {
+  return `<span class="card back mini-card ${isLight(color) ? 'light' : ''}" style="--pc:${color}"><span class="card-mark">?</span></span>`;
+}
+
+// 入室画面では選んだ色を覚えるだけ。部屋の中（設定）では自分の色を書き換える
+function pickColor(hex) {
+  if (!isColor(hex)) return;
+  safeStorage.set('knr:lastColor', hex);
+  if (state?.players[pid]) {
+    update((s) => {
+      if (!s.players[pid]) return undefined;
+      s.players[pid].color = hex;
+      return s;
+    });
+    return;
+  }
+  entryColor = hex;
+  const form = document.getElementById('entry-form');
+  if (!form) return;
+  form.querySelector('.color-picker').outerHTML = colorPickerHtml(hex);
+  document.getElementById('color-preview').innerHTML = previewCardHtml(hex);
+}
+
+const colorOf = (s, id) => (isColor(s.players[id]?.color) ? s.players[id].color : DEFAULT_COLOR);
+
+// カードや名前の横に付ける、その人の色の指定
+function colorAttrs(s, id) {
+  const c = colorOf(s, id);
+  return { style: `--pc:${c}`, light: isLight(c) ? 'light' : '' };
 }
 
 function withTimeout(promise, ms) {
@@ -181,7 +241,7 @@ function googleBoxHtml() {
 function renderMessage(title, body, button) {
   app.innerHTML = `
     <main class="entry">
-      <h1 class="logo">${GAME_TITLE}<small>（仮）</small></h1>
+      <h1 class="logo">${GAME_TITLE}</h1>
       <div class="entry-card">
         <h2>${esc(title)}</h2>
         <p>${esc(body)}</p>
@@ -198,9 +258,9 @@ async function createRoom(name) {
     id,
     hostId: pid,
     createdAt: store.now(),
-    players: { [pid]: { name, joinedAt: store.now() } },
+    players: { [pid]: { name, color: entryColor, joinedAt: store.now() } },
     phase: 'lobby', // lobby → topic → playing → reveal → lobby …
-    settings: { perPlayer: 1 },
+    settings: { perPlayer: 2, playStyle: 'one' },
     topic: newTopic(),
     cards: {},
     line: [],
@@ -223,7 +283,7 @@ async function joinRoom(name) {
       error = `この部屋は満員です（最大${MAX_PLAYERS}人）`;
       return undefined;
     }
-    s.players[pid] = { name, joinedAt: store.now() };
+    s.players[pid] = { name, color: entryColor, joinedAt: store.now() };
     return s;
   });
   if (!result) error = 'この部屋は見つかりませんでした';
@@ -237,14 +297,11 @@ function enterRoom() {
   app.innerHTML = `
     <div class="room">
       <header class="topbar">
-        <div class="logo small">${GAME_TITLE}<small>（仮）</small></div>
+        <div class="logo small">${GAME_TITLE}</div>
         <div class="topbar-right">
           <span class="room-code">部屋 <b>${esc(roomId)}</b></span>
-          <button class="btn ghost" data-action="toggle-sound" id="sound-btn" title="効果音のオン・オフ">${sound.muted ? '🔇' : '🔊'}</button>
           <button class="btn ghost" data-action="copy-invite">招待リンクをコピー</button>
-          <button class="btn ghost" data-action="open-history" id="history-btn" hidden>履歴</button>
-          <button class="btn ghost danger" data-action="dissolve" id="dissolve-btn" hidden>解散</button>
-          <button class="btn ghost danger" data-action="leave" id="leave-btn" hidden>退出</button>
+          <button class="btn ghost gear" data-action="open-settings" title="設定" aria-label="設定">⚙</button>
         </div>
       </header>
       <section id="players" class="players"></section>
@@ -253,6 +310,7 @@ function enterRoom() {
       <section id="stage" class="stage"></section>
       <section id="controls" class="controls"></section>
     </div>
+    <div id="settings"></div>
     <div id="modal"></div>`;
   unsubscribe?.();
   unsubscribe = store.subscribe(roomId, (s) => {
@@ -321,9 +379,6 @@ function render() {
 
   syncValues();
   startSpinIfNew();
-  document.getElementById('history-btn').hidden = !isHost();
-  document.getElementById('dissolve-btn').hidden = !isHost();
-  document.getElementById('leave-btn').hidden = isHost();
   patch(document.getElementById('players'), playersHtml());
   patch(document.getElementById('notice'), noticeHtml());
   const topicEl = document.getElementById('topic');
@@ -332,6 +387,7 @@ function render() {
   patch(document.getElementById('stage'), stageHtml());
   patch(document.getElementById('controls'), controlsHtml());
   if (historyOpen && !isHost()) actions['close-history']();
+  renderSettings();
   saveHistoryIfDone();
   // お題番が「このお題で始める」を押したら、ホストの画面が数字を配る
   if (isHost() && state.phase === 'topic' && state.topic.ready) dealAndStart();
@@ -353,6 +409,7 @@ function runEffects() {
   if (fx && fx.round === s.round) {
     const newly = played.filter((id) => !fx.played.has(id));
     if (s.phase === 'playing' && newly.length) announcePlayed(newly);
+    if (s.phase === 'playing' && s.style === 'all' && s.wordsOpen && !fx.wordsOpen) announceOpen();
     if (s.phase === 'reveal' && count > fx.count) {
       sound.flip();
       const nums = s.line.map(valueOf);
@@ -375,6 +432,7 @@ function runEffects() {
     round: s.round,
     played: new Set(played),
     count,
+    wordsOpen: s.phase === 'playing' && s.wordsOpen,
     doneRound: done ? s.round : fx?.round === s.round ? fx.doneRound : 0,
   };
 }
@@ -384,9 +442,21 @@ function announcePlayed(ids) {
   sound.pop();
   const owners = [...new Set(ids.map((id) => state.cards[id]?.owner))];
   const who = owners.map((o) => (o === pid ? 'あなた' : `${nameOf(state, o)} さん`)).join('、');
-  banner(`🃏 ${who}がカードを出しました！`);
+  // 一斉公開で全員がそろった瞬間は、公開の知らせを優先する
+  if (state.style === 'all' && state.wordsOpen) return;
+  banner(state.style === 'all' ? `✍️ ${who}が書き終わりました` : `🃏 ${who}がカードを出しました！`);
   const until = Date.now() + FRESH_MS;
   ids.forEach((id) => freshCards.set(id, until));
+  setTimeout(requestRender, 0);
+  setTimeout(requestRender, FRESH_MS + 50);
+}
+
+// 一斉公開：全員が書き終わったら、すべてのカードを光らせて知らせる
+function announceOpen() {
+  sound.decide();
+  banner('🎉 全員そろいました！ひとことオープン');
+  const until = Date.now() + FRESH_MS;
+  Object.keys(state.cards).forEach((id) => freshCards.set(id, until));
   setTimeout(requestRender, 0);
   setTimeout(requestRender, FRESH_MS + 50);
 }
@@ -434,7 +504,7 @@ function playersHtml() {
     const canRemove = s.phase === 'lobby' || s.phase === 'topic' || (s.phase === 'playing' && !isOnline(p.id));
     const remove = isHost() && canRemove && p.id !== pid
       ? `<button class="chip-x" data-action="remove-player" data-id="${p.id}" title="部屋から外す">×</button>` : '';
-    return `<span class="chip ${p.id === pid ? 'me' : ''} ${isOnline(p.id) ? '' : 'offline'}">
+    return `<span class="chip ${p.id === pid ? 'me' : ''} ${isOnline(p.id) ? '' : 'offline'}" style="${colorAttrs(s, p.id).style}">
       <span class="dot" title="${isOnline(p.id) ? 'オンライン' : 'オフライン'}"></span>
       ${p.id === s.hostId ? '<span class="crown" title="ホスト">👑</span>' : ''}
       ${esc(p.name)}${p.id === pid ? '<span class="chip-sub">あなた</span>' : ''}${status}
@@ -562,19 +632,28 @@ function stageHtml() {
   return `${lineHtml()}${s.phase === 'playing' ? stagingHtml() : resultHtml()}`;
 }
 
+// 遊ぶゲームを選ぶ。選べるのはホスト
+const GAMES = [
+  { id: 'kazu', icon: '🔢', name: '数並べ', desc: '配られた数字（1〜100）をお題に沿ったひとことで表して、みんなで小さい順に並べる協力ゲーム' },
+  { id: 'tier', icon: '🏆', name: 'Tier表作成', desc: '1人がお題の選択肢を順位づけ。ほかの人は、その人がどれをどの順に選んだかを予想する', soon: true },
+];
+
 function lobbyStageHtml() {
   const s = state;
+  const few = Object.keys(s.players).length < MIN_PLAYERS;
+  const host = isHost();
   return `
-    <div class="panel howto">
-      <h3>遊び方</h3>
-      <ol>
-        <li>みんながそろったら、ホストが枚数を決めてゲームを始めます。</li>
-        <li>ジャンルを選んでルーレットを回すか、みんなでお題を出し合って投票してお題を決めます。</li>
-        <li>配られた数字（1〜100）を、お題に沿った「ひとこと」で表現してカードを出します。</li>
-        <li>出されたカードは待機エリアに置かれます。みんなで相談して、小さい順になるよう列に並べます。</li>
-        <li>並びが決まったら、ホストが答え合わせをして1枚ずつめくります。</li>
-      </ol>
-      ${Object.keys(s.players).length < MIN_PLAYERS ? `<p class="hint">「招待リンクをコピー」で友達を呼びましょう（${MIN_PLAYERS}人から遊べます）</p>` : ''}
+    <div class="panel">
+      <h3>遊ぶゲームを選ぶ <span class="hint">${host ? (few ? `${MIN_PLAYERS}人以上で始められます` : '押すとお題選びに進みます') : 'ホストが選びます'}</span></h3>
+      <div class="game-grid">
+        ${GAMES.map((g) => `
+          <button class="game-box" data-action="start" data-game="${g.id}" ${host && !few && !g.soon ? '' : 'disabled'}>
+            <span class="game-icon">${g.icon}</span>
+            <span class="game-name">${g.name}${g.soon ? '<span class="soon">準備中</span>' : ''}</span>
+            <span class="game-desc">${g.desc}</span>
+          </button>`).join('')}
+      </div>
+      ${few ? `<p class="hint">「招待リンクをコピー」で友達を呼びましょう（${MIN_PLAYERS}人から遊べます）</p>` : ''}
     </div>`;
 }
 
@@ -668,12 +747,15 @@ function shiftBadge(shift) {
 }
 
 function cardHtml(card, { faceUp = false, draggable = false, classes = '', shift = null } = {}) {
+  const color = colorAttrs(state, card.owner);
+  const hidden = wordHidden(card);
+  const word = hidden ? '？' : card.word;
   return `
-    <div class="card ${faceUp ? 'face' : 'back'} ${classes}" data-card="${card.id}" ${draggable ? `data-drag="${card.id}"` : ''} title="${esc(nameOf(state, card.owner))}：${esc(card.word)}">
+    <div class="card ${faceUp ? 'face' : 'back'} ${color.light} ${hidden ? 'hidden-word' : ''} ${classes}" style="${color.style}" data-card="${card.id}" ${draggable ? `data-drag="${card.id}"` : ''} title="${esc(nameOf(state, card.owner))}：${esc(word)}">
       ${shiftBadge(shift)}
       <div class="card-owner">${esc(nameOf(state, card.owner))}</div>
       ${faceUp ? `<div class="card-num">${valueOf(card.id) ?? '…'}</div>` : '<div class="card-mark">?</div>'}
-      <div class="card-word">${esc(card.word)}</div>
+      <div class="card-word">${esc(word)}</div>
     </div>`;
 }
 
@@ -682,7 +764,7 @@ function lineHtml() {
   const playing = s.phase === 'playing';
   let inner;
   if (playing) {
-    inner = s.line.map((id) => cardHtml(s.cards[id], { draggable: true, classes: isFresh(id) ? 'fresh' : '' })).join('');
+    inner = s.line.map((id) => cardHtml(s.cards[id], { draggable: canArrange(), classes: isFresh(id) ? 'fresh' : '' })).join('');
   } else {
     const { direction, count } = s.reveal;
     const ready = valuesReady();
@@ -716,10 +798,15 @@ function lineHtml() {
 
 function stagingHtml() {
   const s = state;
-  const cards = s.staging.map((id) => cardHtml(s.cards[id], { draggable: true, classes: isFresh(id) ? 'fresh' : '' })).join('');
+  const cards = s.staging.map((id) => cardHtml(s.cards[id], { draggable: canArrange(), classes: isFresh(id) ? 'fresh' : '' })).join('');
+  let hint = 'ドラッグして列に入れてください。カードをタップするとひとことを大きく表示します';
+  if (!canArrange()) {
+    const waiting = playersOf(s).filter((p) => Object.values(s.cards).some((c) => c.owner === p.id && !c.played));
+    hint = `全員が書き終わると、ひとことが一斉に表示されます（まだの人：${waiting.map((p) => esc(p.name)).join('、')}）`;
+  }
   return `
     <div class="zone staging-zone" data-zone="staging">
-      <div class="zone-head"><span class="zone-title">待機エリア</span><span class="hint">ドラッグして列に入れてください。カードをタップするとひとことを大きく表示します</span></div>
+      <div class="zone-head"><span class="zone-title">待機エリア</span><span class="hint">${hint}</span></div>
       <div class="card-row">${cards || '<p class="zone-empty">まだカードはありません</p>'}</div>
     </div>`;
 }
@@ -741,32 +828,10 @@ function resultHtml() {
 
 function controlsHtml() {
   const s = state;
-  if (s.phase === 'lobby') return isHost() ? hostLobbyHtml() : '<div class="panel waiting">ホストがゲームを始めるのを待っています…</div>';
+  if (s.phase === 'lobby') return '';
   if (s.phase === 'topic') return isChooser() || isHost() ? topicControlsHtml() : topicWaitingHtml();
   if (s.phase === 'playing') return `${handHtml()}${isHost() ? hostPlayingHtml() : ''}`;
   return isHost() ? hostRevealHtml() : `<div class="panel waiting">${revealStatus()}</div>`;
-}
-
-function hostLobbyHtml() {
-  const s = state;
-  const n = Object.keys(s.players).length;
-  const reason = n < MIN_PLAYERS ? `${MIN_PLAYERS}人以上で始められます` : '';
-  return `
-    <div class="panel host-panel">
-      <h3>ホストの設定</h3>
-      <div class="settings">
-        <label class="field">
-          <span>1人あたりの枚数</span>
-          <select data-change="per-player">
-            ${[1, 2, 3].map((k) => `<option value="${k}" ${s.settings.perPlayer === k ? 'selected' : ''}>${k}枚</option>`).join('')}
-          </select>
-        </label>
-      </div>
-      <div class="start-row">
-        <button class="btn primary big" data-action="start" ${reason ? 'disabled' : ''}>ゲーム開始</button>
-        <span class="hint">${reason || '押すとお題選びに進みます'}</span>
-      </div>
-    </div>`;
 }
 
 // お題選びの操作。お題番が中心に操作し、ホストは困ったときのために同じ操作と「とばす」ができる
@@ -780,7 +845,13 @@ function topicControlsHtml() {
   if (t.current && t.ready) {
     main = '<span class="hint">数字を配っています…</span>';
   } else if (t.current) {
+    // 枚数はお題を見てから決める。変えた枚数は次のゲームにも引き継ぐ
     main = `
+      <label class="per-player">1人
+        <select data-change="per-player">
+          ${[1, 2, 3].map((k) => `<option value="${k}" ${state.settings.perPlayer === k ? 'selected' : ''}>${k}枚</option>`).join('')}
+        </select>
+      </label>
       <button class="btn primary big" data-action="begin-play" ${spinAnim ? 'disabled' : ''}>このお題で始める</button>
       ${t.step === 'choose' ? (isChooser() ? '<span class="hint">ジャンルを押すと回し直せます</span>' : '') : back}`;
   } else if (t.step === 'input') {
@@ -803,7 +874,7 @@ function topicControlsHtml() {
 function topicWaitingHtml() {
   const t = state.topic;
   const who = esc(nameOf(state, t.chooser));
-  if (t.current) return `<div class="panel waiting">${who} さんがゲームを始めるのを待っています…</div>`;
+  if (t.current) return `<div class="panel waiting">${who} さんがゲームを始めるのを待っています…（1人${state.settings.perPlayer}枚）</div>`;
   if (t.step === 'choose') return `<div class="panel waiting">お題番の ${who} さんがお題を選んでいます…</div>`;
   return '';
 }
@@ -816,11 +887,11 @@ function handHtml() {
   if (unplayed.length === 0) return '<div class="panel waiting">手札をすべて出しました。みんなで並べ方を相談しましょう。</div>';
   return `
     <div class="panel hand">
-      <h3>あなたの手札 <span class="hint">数字は自分にしか見えません。出したカードは戻せず、ひとことも変えられません</span></h3>
+      <h3>あなたの手札 <span class="hint">数字は自分にしか見えません。出したカードは戻せず、ひとことも変えられません${s.style === 'all' ? '。全員が書き終わるまで、ほかの人にはひとことは「？」に見えます' : ''}</span></h3>
       <div class="hand-row">
         ${unplayed.map((c) => `
           <form class="hand-card" data-form="play" data-id="${c.id}">
-            <div class="card face mine"><div class="card-num">${valueOf(c.id) ?? '…'}</div></div>
+            <div class="card face mine" style="${colorAttrs(s, pid).style}"><div class="card-num">${valueOf(c.id) ?? '…'}</div></div>
             <input data-keep="word-${c.id}" maxlength="40" placeholder="ひとこと" autocomplete="off" required>
             <button class="btn primary" type="submit">出す</button>
           </form>`).join('')}
@@ -870,6 +941,61 @@ function revealStatus() {
   if (!direction) return 'ホストが答え合わせの準備をしています…';
   if (count < state.line.length) return `${direction === 'asc' ? '下' : '上'}からめくっています（${count}/${state.line.length}）`;
   return 'ホストが次のゲームを準備しています…';
+}
+
+// ---------- 設定（右上の歯車） ----------
+
+const PLAY_STYLES = [
+  { id: 'one', name: '1枚ずつ出す', desc: '書けた人から順にカードを出し、出たカードからどんどん並べていく' },
+  { id: 'all', name: '一斉に公開', desc: '全員がひとことを書き終わるまで「？」で隠し、そろったら一気に表示して並べる' },
+];
+
+function renderSettings() {
+  patch(document.getElementById('settings'), settingsOpen && state ? settingsHtml() : '');
+}
+
+function settingsHtml() {
+  const s = state;
+  const host = isHost();
+  const inGame = s.phase === 'playing' || s.phase === 'reveal';
+  const mine = colorOf(s, pid);
+  return `
+    <div class="modal-back" data-action="close-settings">
+      <div class="modal settings-modal">
+        <div class="modal-head">
+          <h3>⚙ 設定</h3>
+          <button class="btn ghost" data-action="close-settings">閉じる</button>
+        </div>
+        <section class="set-sec">
+          <h4>効果音</h4>
+          <button class="btn ${sound.muted ? '' : 'primary'}" data-action="toggle-sound">${sound.muted ? '🔇 オフ' : '🔊 オン'}</button>
+        </section>
+        <section class="set-sec">
+          <h4>カードの色</h4>
+          <div class="color-row">${previewCardHtml(mine)}${colorPickerHtml(mine)}</div>
+        </section>
+        ${host ? `
+        <section class="set-sec">
+          <h4>数並べの出し方 <span class="hint">ホストだけが変えられます${inGame ? '。いまのゲームには次のゲームから反映されます' : ''}</span></h4>
+          <div class="style-options">
+            ${PLAY_STYLES.map((o) => `
+              <button class="style-option ${s.settings.playStyle === o.id ? 'selected' : ''}" data-action="play-style" data-id="${o.id}">
+                <b>${o.name}</b><span>${o.desc}</span>
+              </button>`).join('')}
+          </div>
+        </section>
+        <section class="set-sec">
+          <h4>ゲーム履歴</h4>
+          <button class="btn" data-action="open-history">履歴を見る</button>
+        </section>` : ''}
+        <section class="set-sec">
+          <h4>部屋</h4>
+          ${host
+            ? '<button class="btn danger-btn" data-action="dissolve">部屋を解散する</button> <span class="hint">全員がトップ画面に戻ります</span>'
+            : '<button class="btn danger-btn" data-action="leave">部屋から退出する</button>'}
+        </section>
+      </div>
+    </div>`;
 }
 
 // ---------- 履歴（ホストだけ） ----------
@@ -970,6 +1096,7 @@ const actions = {
 
   async dissolve() {
     if (!window.confirm('部屋を解散しますか？（全員がトップ画面に戻ります）')) return;
+    settingsOpen = false;
     const id = roomId;
     stopRoomListeners();
     await store.leavePresence(id, pid);
@@ -980,6 +1107,7 @@ const actions = {
 
   async leave() {
     if (!window.confirm('この部屋から退出しますか？')) return;
+    settingsOpen = false;
     const id = roomId;
     stopRoomListeners();
     await store.update(id, (s) => removePlayer(s, pid));
@@ -988,9 +1116,30 @@ const actions = {
     toast('部屋から退出しました');
   },
 
-  'toggle-sound'(el) {
+  'toggle-sound'() {
     sound.setMuted(!sound.muted);
-    el.textContent = sound.muted ? '🔇' : '🔊';
+    renderSettings();
+  },
+
+  'open-settings'() {
+    settingsOpen = true;
+    renderSettings();
+  },
+
+  'close-settings'() {
+    settingsOpen = false;
+    renderSettings();
+  },
+
+  'pick-color'(el) {
+    pickColor(el.dataset.color);
+  },
+
+  'play-style'(el) {
+    update((s) => {
+      s.settings.playStyle = el.dataset.id === 'all' ? 'all' : 'one';
+      return s;
+    });
   },
 
   'take-host'() {
@@ -1001,9 +1150,11 @@ const actions = {
     });
   },
 
-  start() {
+  start(el) {
+    if (el.dataset.game !== 'kazu') return;
     update((s) => {
       if (s.phase !== 'lobby' || Object.keys(s.players).length < MIN_PLAYERS) return undefined;
+      s.game = 'kazu';
       const chooser = nextChooser(s, s.lastChooser);
       s.phase = 'topic';
       s.topic = newTopic(chooser);
@@ -1135,6 +1286,8 @@ const actions = {
   },
 
   'open-history'() {
+    settingsOpen = false;
+    renderSettings();
     historyOpen = true;
     renderHistoryModal();
   },
@@ -1163,6 +1316,8 @@ async function dealAndStart() {
       s.staging = [];
       s.reveal = null;
       s.round += 1;
+      s.style = s.settings.playStyle;
+      s.wordsOpen = false;
       s.phase = 'playing';
       return s;
     });
@@ -1200,8 +1355,19 @@ function removePlayer(s, id) {
     s.line = s.line.filter((cid) => !removed.has(cid));
     s.staging = s.staging.filter((cid) => !removed.has(cid));
   }
-  return advanceTopic(s);
+  return advanceTopic(openWordsIfReady(s));
 }
+
+// 一斉公開のゲームでは、全員のカードが出そろった時点でひとことを表示する
+function openWordsIfReady(s) {
+  const cards = Object.values(s.cards);
+  if (s.phase === 'playing' && s.style === 'all' && cards.length && cards.every((c) => c.played)) s.wordsOpen = true;
+  return s;
+}
+
+// ひとことを「？」で隠しておくか（自分のカードは自分には見える）
+const wordHidden = (card) => state.phase === 'playing' && state.style === 'all' && !state.wordsOpen && card.owner !== pid;
+const canArrange = () => state.phase === 'playing' && (state.style !== 'all' || state.wordsOpen);
 
 // 全員がお題を入力したら投票へ、全員が投票したら集計へ自動で進む
 function advanceTopic(s) {
@@ -1245,14 +1411,19 @@ const forms = {
       card.played = true;
       card.word = word;
       s.staging.push(id);
-      return s;
+      return openWordsIfReady(s);
     });
   },
 };
 
 const changes = {
+  'custom-color'(el) {
+    pickColor(el.value);
+  },
+
   'per-player'(el) {
     update((s) => {
+      if (s.phase !== 'topic' || s.topic.ready) return undefined;
       s.settings.perPlayer = Number(el.value);
       return s;
     });
@@ -1265,13 +1436,14 @@ function showCardDetail(cardEl) {
   const card = state?.cards[cardEl.dataset.card];
   if (!card) return;
   const faceUp = cardEl.classList.contains('face');
+  const word = wordHidden(card) ? '？（全員が書き終わると表示されます）' : card.word;
   const el = document.createElement('div');
   el.className = 'card-detail-back';
   el.innerHTML = `
     <div class="card-detail">
       <div class="detail-owner">${esc(nameOf(state, card.owner))} さんのカード</div>
       ${faceUp ? `<div class="detail-num">${valueOf(card.id) ?? '…'}</div>` : ''}
-      <div class="detail-word">${esc(card.word)}</div>
+      <div class="detail-word">${esc(word)}</div>
       <button class="btn">閉じる</button>
     </div>`;
   el.addEventListener('click', () => el.remove());
@@ -1318,7 +1490,7 @@ setupDrag({
   },
   onDrop(id, zone, index) {
     update((s) => {
-      if (s.phase !== 'playing' || !s.cards[id]?.played) return undefined;
+      if (s.phase !== 'playing' || !s.cards[id]?.played || (s.style === 'all' && !s.wordsOpen)) return undefined;
       s.line = s.line.filter((x) => x !== id);
       s.staging = s.staging.filter((x) => x !== id);
       if (zone === 'line') s.line.splice(Math.min(index, s.line.length), 0, id);
