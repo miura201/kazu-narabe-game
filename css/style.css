@@ -870,3 +870,12 @@ input:focus, select:focus { outline: none; border-color: var(--indigo); }
   .pair-row { grid-template-columns: 2em 1fr 3.5em; }
   .pair-bar { grid-column: 2 / 4; grid-row: 2; }
 }
+
+/* 〇〇のことを一番分かっていた人 */
+.knower {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent, #6366f1) 12%, transparent);
+  text-align: center;
+}

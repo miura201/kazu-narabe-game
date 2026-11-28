@@ -3,7 +3,7 @@ import {
   MAX_PLAYERS, MIN_PLAYERS, randomRoomId, randomId, shuffle, deal,
   revealOrder, liveWrong, positionShifts, shiftLabel, isSuccess,
 } from './logic.js';
-import { TOPIC_MODES, FREE_ID, topicsFor } from './topics.js';
+import { TOPIC_MODES, FREE_ID, NAME_MARK, topicsFor } from './topics.js';
 import { setupDrag } from './drag.js';
 import { sound, confetti } from './effects.js';
 import { PALETTE, randomColor, isColor, isLight, DEFAULT_COLOR } from './colors.js';
@@ -580,7 +580,7 @@ function topicHtml() {
     return `<div class="topic-label">お題</div><div class="topic-text empty">${waiting}</div>`;
   }
   const by = t.by ? `<div class="topic-by">${esc(nameOf(state, t.by))} さんの案</div>` : '';
-  return `<div class="topic-label">お題</div><div class="topic-text">${esc(t.current)}</div>${by}`;
+  return `<div class="topic-label">お題</div><div class="topic-text">${esc(topicText(state))}</div>${by}`;
 }
 
 function startSpinIfNew() {
@@ -588,22 +588,36 @@ function startSpinIfNew() {
   if (!spin || spin.id === lastSpinId) return;
   lastSpinId = spin.id;
   if (store.now() - spin.at > SPIN_FRESH_MS) return;
-  // だんだん遅くなりながらお題が切り替わり、最後に結果で止まる
+  // だんだん遅くなりながらお題が切り替わり、最後に結果で止まる。
+  // 〇〇 入りのお題なら、続けて名前のルーレットを回す
+  const stages = [];
+  if (!spin.skipTopic) stages.push({ items: spin.items.length ? spin.items : [spin.result], result: spin.result });
+  const names = toArr(spin.names);
+  if (names.length) stages.push({ items: names, result: spin.final });
+  if (!stages.length) return;
+  runSpin(spin.id, stages);
+}
+
+function runSpin(id, stages) {
+  const [{ items, result }, ...rest] = stages;
   const steps = 18;
-  const items = spin.items.length ? spin.items : [spin.result];
-  spinAnim = { id: spin.id, text: items[0] };
+  spinAnim = { id, text: items[0] };
   let i = 0;
   const tick = () => {
-    if (spinAnim?.id !== spin.id) return;
+    if (spinAnim?.id !== id) return;
     i++;
     if (i >= steps) {
-      spinAnim = null;
       sound.decide();
+      if (rest.length) {
+        setTimeout(() => runSpin(id, rest), 500);
+        return;
+      }
+      spinAnim = null;
       requestRender();
       return;
     }
     sound.tick();
-    spinAnim.text = i === steps - 1 ? spin.result : items[i % items.length];
+    spinAnim.text = i === steps - 1 ? result : items[i % items.length];
     const el = document.getElementById('reel-text');
     if (el) {
       el.textContent = spinAnim.text;
@@ -621,9 +635,38 @@ function spinTopic(list, pick) {
   return { id: randomId(), at: store.now(), items, result: pick };
 }
 
+const toArr = (v) => (Array.isArray(v) ? v : v ? Object.values(v) : []);
+
+// お題の 〇〇 を、選ばれた人の名前にした文
+function topicText(s, text = s.topic.current) {
+  if (!text || !s.topic.target || !text.includes(NAME_MARK)) return text;
+  return text.split(NAME_MARK).join(nameOf(s, s.topic.target));
+}
+
+// お題が決まったら 〇〇 に入る人を決める。
+// Tier表の当てるモードは並べる人（お題番）本人。それ以外は全員（お題番も含む）からルーレット。
+// r はトランザクションの外で引いた乱数（やり直しのたびに別の人にならないように）
+function assignTarget(s, r = Math.random()) {
+  s.topic.target = null;
+  const text = s.topic.current;
+  if (!text || !text.includes(NAME_MARK)) return s;
+  if (s.game === 'tier' && s.tierMode !== 'match') {
+    s.topic.target = s.topic.chooser ?? s.hostId;
+    return s;
+  }
+  const ids = playersOf(s).map((p) => p.id);
+  if (!ids.length) return s;
+  s.topic.target = ids[Math.floor(r * ids.length)];
+  const names = shuffle(ids).map((id) => text.split(NAME_MARK).join(nameOf(s, id)));
+  s.topic.spin ??= { id: randomId(), at: store.now(), items: [], result: text, skipTopic: true };
+  s.topic.spin.names = names;
+  s.topic.spin.final = topicText(s);
+  return s;
+}
+
 // chooser はお題番（そのゲームでジャンルを選んでルーレットを回す人）。やり直しても同じ人のまま
 function newTopic(chooser = null) {
-  return { current: null, by: null, step: 'choose', genre: null, submissions: {}, votes: {}, tally: null, spin: null, chooser, ready: false, browse: false };
+  return { current: null, by: null, step: 'choose', genre: null, submissions: {}, votes: {}, tally: null, spin: null, chooser, ready: false, browse: false, target: null };
 }
 
 // そのゲームで使うお題の一覧（ルーレット・自分で選ぶの両方で使う）
@@ -661,7 +704,7 @@ function decideByVote(s) {
   s.topic.by = win.owner;
   s.topic.tally = tally;
   s.topic.spin = top.length > 1 ? spinTopic(top.map((c) => c.text), win.text) : null;
-  return s;
+  return assignTarget(s);
 }
 
 // ---------- メインエリア ----------
@@ -1117,7 +1160,7 @@ async function saveHistoryIfDone() {
   await history.add({
     id: randomId(),
     at: Date.now(),
-    topic: s.topic.current,
+    topic: topicText(s),
     direction,
     success: isSuccess(nums),
     cards: s.line.map((id, i) => ({
@@ -1337,10 +1380,11 @@ const actions = {
   'pick-topic'(el) {
     const text = titlesFor(state.game, state.topic.genre)[Number(el.dataset.i)];
     if (!text) return;
+    const r = Math.random();
     update((s) => {
       if (s.phase !== 'topic' || s.topic.step !== 'choose') return undefined;
       s.topic = { ...newTopic(s.topic.chooser), genre: s.topic.genre, current: text, browse: true };
-      return s;
+      return assignTarget(s, r);
     });
   },
 
@@ -1368,9 +1412,11 @@ const actions = {
     if (list.length === 0) return;
     const options = list.length > 1 ? list.filter((t) => t !== state.topic.current) : list;
     const pick = options[Math.floor(Math.random() * options.length)];
+    const r = Math.random();
+    const spin = spinTopic(list, pick);
     update((s) => {
-      s.topic = { ...newTopic(s.topic.chooser), genre, current: pick, spin: spinTopic(list, pick) };
-      return s;
+      s.topic = { ...newTopic(s.topic.chooser), genre, current: pick, spin: { ...spin } };
+      return assignTarget(s, r);
     });
   },
 

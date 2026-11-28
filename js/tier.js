@@ -213,7 +213,14 @@ export function createTier(ctx) {
       if (same && !t.result) ctx.banner(`✨ ${rank + 1}位は全員一致！`);
     }
     if (t.result && !fx.result) {
-      const { allSame, firstSame, destiny } = t.result;
+      const { allSame, firstSame, destiny, target, knower } = t.result;
+      const special = allSame || destiny.length || firstSame;
+      if (target && knower.length) {
+        setTimeout(() => {
+          ctx.banner(`🔎 ${who(target)}のことを一番分かっていたのは ${knower.map(who).join('・')}`);
+          ctx.sound.success();
+        }, special ? 3000 : 500);
+      }
       setTimeout(() => {
         if (allSame) {
           ctx.banner('🎉 全員の順位が完全一致！');
@@ -463,7 +470,15 @@ export function createTier(ctx) {
         ${bannerHtml()}
         <div class="ans-head">みんなの順位 <span class="hint">同じ順位に同じものを置いた人どうしは、同じ色で光ります</span></div>
         ${rows}
+        ${knowerHtml()}
       </div>`;
+  }
+
+  function knowerHtml() {
+    const r = T().result;
+    if (!r?.target || !r.knower.length) return '';
+    return `<div class="knower">🔎 <b>${esc(ctx.nameOf(S(), r.target))}</b> のことを一番分かっていたのは
+      <b>${r.knower.map((id) => esc(ctx.nameOf(S(), id))).join('・')}</b>（${r.knowerPct}%）</div>`;
   }
 
   function stageHtml() {
@@ -668,10 +683,26 @@ export function createTier(ctx) {
       }
     }
     const pairCount = (ids.length * (ids.length - 1)) / 2;
+    // 〇〇 入りのお題なら、〇〇本人の順位に一番近かった人
+    let knower = [];
+    let knowerPct = 0;
+    const target = s.topic?.target;
+    if (target && ids.includes(target) && ids.length >= 2) {
+      const others = ids.filter((id) => id !== target);
+      const scores = Object.fromEntries(others.map((id) => [id, matchScore(gs[id], gs[target])]));
+      const best = Math.max(...Object.values(scores));
+      if (best > 0) {
+        knower = others.filter((id) => scores[id] === best);
+        knowerPct = Math.round((best / full) * 100);
+      }
+    }
     t.result = {
       allSame: ids.length >= 3 && destiny.length === pairCount,
       firstSame: ids.length >= 2 && ids.every((id) => gs[id][0] === gs[ids[0]][0]),
       destiny,
+      target: knower.length ? target : null,
+      knower,
+      knowerPct,
     };
   }
 

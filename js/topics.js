@@ -176,6 +176,24 @@ export const GENRES = [
   },
 ];
 
+// 〇〇 には、お題が決まったときにルーレットで選ばれた人の名前が入る（NAME_MARK）
+GENRES.push({
+  id: 'people',
+  icon: '👥',
+  name: 'みんなのこと',
+  topics: [
+    '〇〇がやりそうなこと',
+    '〇〇が言いそうなセリフ',
+    '〇〇と一緒にしたいこと',
+    '〇〇がもらって喜びそうなもの',
+    '〇〇が10年後にしていそうなこと',
+    '〇〇に似合いそうな職業',
+    '〇〇が怒りそうなこと',
+  ],
+});
+
+export const NAME_MARK = '〇〇';
+
 export const RANDOM_ID = 'random';
 export const FREE_ID = 'free';
 

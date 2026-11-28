@@ -62,6 +62,7 @@ function normalize(s) {
   s.topic.chooser ??= null;
   s.topic.ready ??= false;
   s.topic.browse ??= false;
+  s.topic.target ??= null; // お題の 〇〇 に入る人
   s.lastChooser ??= null;
   if (s.topic.spin) s.topic.spin.items = toArray(s.topic.spin.items);
   s.reveal ??= null;
@@ -86,6 +87,7 @@ function normalize(s) {
       s.tier.result.winners = toArray(s.tier.result.winners);
       s.tier.result.perfect = toArray(s.tier.result.perfect);
       s.tier.result.destiny = toArray(s.tier.result.destiny);
+      s.tier.result.knower = toArray(s.tier.result.knower);
     }
   }
   return s;
