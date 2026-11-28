@@ -783,3 +783,27 @@ input:focus, select:focus { outline: none; border-color: var(--indigo); }
   .g-row { grid-template-columns: 1fr auto; }
   .g-chips { grid-column: 1 / -1; }
 }
+
+/* Tier表：ドラッグで並べ替え */
+.drop-marker.y { width: auto; height: 4px; margin: -2px 0; list-style: none; }
+.slot[data-drag] { touch-action: none; cursor: grab; }
+.slot-grip { color: var(--muted); font-size: 1.1rem; }
+.opt[data-drag] { touch-action: pan-y; }
+.slot.dragging, .opt.dragging { opacity: .25; }
+.tier-slots.zone-hover, .tier-pool.zone-hover { outline: 3px dashed var(--indigo); outline-offset: 4px; border-radius: 10px; }
+.g-chip.closed { color: var(--muted); border-style: dashed; }
+
+/* お題を自分で選ぶ */
+.topic-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 2px dashed var(--line); }
+.topic-item {
+  border: 2px solid var(--ink);
+  border-radius: 10px;
+  background: #fff;
+  padding: 8px 12px;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: left;
+}
+.topic-item:hover:not(:disabled) { background: #fff6ec; }
+.topic-item:disabled { cursor: default; border-color: var(--line); }
+.topic-item.selected { background: var(--accent); color: #fff; border-color: var(--ink); }

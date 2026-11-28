@@ -1,5 +1,6 @@
 // カードのドラッグ操作。マウスとスマホのタッチの両方で動くように Pointer Events で実装する。
-// [data-drag="カードID"] の要素をつかんで、[data-zone="line"|"staging"] の上で離すと onDrop が呼ばれる。
+// [data-drag="ID"] の要素をつかんで、[data-zone="…"] の上で離すと onDrop が呼ばれる。
+// 並び順がある場所（数並べの列、Tier表の順位）は data-axis="x"（横に並ぶ）か "y"（縦に並ぶ）を付けると、挿入位置も渡す。
 
 const START_DISTANCE = 6;
 
@@ -65,21 +66,26 @@ export function setupDrag({ onDrop, onDragChange }) {
     }
     zoneEl.classList.add('zone-hover');
     const zone = zoneEl.dataset.zone;
-    if (zone === 'line') {
-      const index = insertIndex(zoneEl, e.clientX, e.clientY);
-      showMarker(zoneEl, index);
+    const axis = zoneEl.dataset.axis;
+    if (axis) {
+      const index = insertIndex(zoneEl, e.clientX, e.clientY, axis);
+      showMarker(zoneEl, index, axis);
       drag.target = { zone, index };
     } else {
       drag.target = { zone, index: Infinity };
     }
   }
 
-  // 折り返した列にも対応した挿入位置の計算
-  function insertIndex(zoneEl, x, y) {
+  // 挿入位置の計算。横の列は折り返しにも対応する
+  function insertIndex(zoneEl, x, y, axis) {
     const cards = [...zoneEl.querySelectorAll('[data-drag]')].filter((c) => c.dataset.drag !== drag.id);
     let index = 0;
     for (const c of cards) {
       const r = c.getBoundingClientRect();
+      if (axis === 'y') {
+        if (y > r.top + r.height / 2) index++;
+        continue;
+      }
       const sameRow = y >= r.top - 8 && y <= r.bottom + 8;
       const before = y > r.bottom + 8 || (sameRow && x > r.left + r.width / 2);
       if (before) index++;
@@ -87,10 +93,10 @@ export function setupDrag({ onDrop, onDragChange }) {
     return index;
   }
 
-  function showMarker(zoneEl, index) {
+  function showMarker(zoneEl, index, axis) {
     const cards = [...zoneEl.querySelectorAll('[data-drag]')].filter((c) => c.dataset.drag !== drag.id);
-    const marker = document.createElement('div');
-    marker.className = 'drop-marker';
+    const marker = document.createElement(zoneEl.tagName === 'OL' ? 'li' : 'div');
+    marker.className = `drop-marker ${axis === 'y' ? 'y' : ''}`;
     const list = zoneEl.querySelector('.card-row') ?? zoneEl;
     if (index < cards.length) list.insertBefore(marker, cards[index]);
     else list.appendChild(marker);

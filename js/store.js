@@ -61,6 +61,7 @@ function normalize(s) {
   s.topic.spin ??= null;
   s.topic.chooser ??= null;
   s.topic.ready ??= false;
+  s.topic.browse ??= false;
   s.lastChooser ??= null;
   if (s.topic.spin) s.topic.spin.items = toArray(s.topic.spin.items);
   s.reveal ??= null;

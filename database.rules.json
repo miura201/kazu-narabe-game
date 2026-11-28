@@ -30,7 +30,7 @@
           ".read": "auth != null && root.child('rooms').child($room).child('state/tier/step').val() === 'reveal'",
           "$uid": {
             ".read": "auth != null && auth.uid === $uid",
-            ".write": "auth != null && auth.uid === $uid && root.child('rooms').child($room).child('state/tier/step').val() === 'predict'"
+            ".write": "auth != null && auth.uid === $uid && (root.child('rooms').child($room).child('state/tier/step').val() === 'ranking' || root.child('rooms').child($room).child('state/tier/step').val() === 'predict')"
           }
         }
       }

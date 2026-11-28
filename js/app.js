@@ -623,8 +623,11 @@ function spinTopic(list, pick) {
 
 // chooser はお題番（そのゲームでジャンルを選んでルーレットを回す人）。やり直しても同じ人のまま
 function newTopic(chooser = null) {
-  return { current: null, by: null, step: 'choose', genre: null, submissions: {}, votes: {}, tally: null, spin: null, chooser, ready: false };
+  return { current: null, by: null, step: 'choose', genre: null, submissions: {}, votes: {}, tally: null, spin: null, chooser, ready: false, browse: false };
 }
+
+// そのゲームで使うお題の一覧（ルーレット・自分で選ぶの両方で使う）
+const titlesFor = (game, genre) => (game === 'tier' ? tierTitlesFor(genre) : topicsFor(genre));
 
 // お題番が決まっていない（古い部屋など）ときは、ホストがお題番の代わりをする
 const isChooser = () => state?.topic.chooser === pid || (!state?.topic.chooser && state?.hostId === pid);
@@ -703,21 +706,29 @@ function lobbyStageHtml() {
 function genreStageHtml() {
   const s = state;
   const me = isChooser();
+  const browse = s.topic.browse;
+  // 自分で選ぶときは、選んだジャンルのお題を一覧で出す
+  const list = browse && s.topic.genre && s.topic.genre !== FREE_ID ? titlesFor(s.game, s.topic.genre) : [];
+  const listHtml = list.length ? `
+      <div class="topic-list">
+        ${list.map((x, i) => `<button class="topic-item ${x === s.topic.current ? 'selected' : ''}" data-action="pick-topic" data-i="${i}" ${me ? '' : 'disabled'}>${esc(x)}</button>`).join('')}
+      </div>` : '';
   return `
     <div class="panel">
       <div class="chooser-banner ${me ? 'me' : ''}">
         🎲 今回のお題番${s.game === 'tier' ? '（並べる人）' : ''}：<b>${me ? 'あなた' : `${esc(nameOf(s, s.topic.chooser))} さん`}</b>
       </div>
-      <h3>ジャンルを選ぶ <span class="hint">${me ? '押すとルーレットが回ります。もう一度押すと回し直せます' : 'お題番の人が選びます'}</span></h3>
+      <h3>ジャンルを選ぶ <span class="hint">${!me ? 'お題番の人が選びます' : browse ? 'ジャンルを押すと、お題が一覧で出ます' : '押すとルーレットが回ります。もう一度押すと回し直せます'}</span></h3>
       <div class="genre-grid">
         ${TOPIC_MODES.map((m) => `
           <button class="genre-box ${s.topic.genre === m.id ? 'selected' : ''} ${m.id === FREE_ID ? 'free' : ''}"
-            data-action="choose-genre" data-id="${m.id}" ${me ? '' : 'disabled'}>
+            data-action="${browse && m.id !== FREE_ID ? 'browse-genre' : 'choose-genre'}" data-id="${m.id}" ${me ? '' : 'disabled'}>
             <span class="genre-icon">${m.icon}</span>
             <span class="genre-name">${m.name}</span>
             ${m.id === FREE_ID ? '<span class="genre-sub">みんなで出し合う</span>' : ''}
           </button>`).join('')}
       </div>
+      ${listHtml}
     </div>`;
 }
 
@@ -829,7 +840,7 @@ function lineHtml() {
     }).join('');
   }
   return `
-    <div class="zone line-zone ${playing ? '' : 'locked'}" ${playing ? 'data-zone="line"' : ''}>
+    <div class="zone line-zone ${playing ? '' : 'locked'}" ${playing ? 'data-zone="line" data-axis="x"' : ''}>
       <div class="zone-head">
         <span class="axis">1 小さい</span>
         <span class="zone-title">並べる列</span>
@@ -879,6 +890,13 @@ function controlsHtml() {
 }
 
 // お題選びの操作。お題番が中心に操作し、ホストは困ったときのために同じ操作と「とばす」ができる
+// 一度ルーレットを回したら、お題を一覧から自分で選べるようにする
+function browseToggle(t) {
+  return t.browse
+    ? '<button class="btn ghost" data-action="browse-off">🎲 ルーレットに戻す</button>'
+    : '<button class="btn ghost" data-action="browse-on">📋 自分で選ぶ</button><span class="hint">ジャンルを押すと回し直せます</span>';
+}
+
 function topicControlsHtml() {
   const t = state.topic;
   const back = '<button class="btn ghost" data-action="back-to-genre">ジャンル選びに戻る</button>';
@@ -897,7 +915,7 @@ function topicControlsHtml() {
         </select>
       </label>`}
       <button class="btn primary big" data-action="begin-play" ${spinAnim ? 'disabled' : ''}>このお題で始める</button>
-      ${t.step === 'choose' ? (isChooser() ? '<span class="hint">ジャンルを押すと回し直せます</span>' : '') : back}`;
+      ${t.step === 'choose' ? (isChooser() ? browseToggle(t) : '') : back}`;
   } else if (t.step === 'input') {
     main = `
       <button class="btn" data-action="close-input">締め切って投票へ</button>
@@ -976,7 +994,8 @@ function hostRevealHtml() {
   }
   return `
     <div class="panel host-panel row">
-      <button class="btn primary big" data-action="next-game">次のゲームへ</button>
+      <button class="btn primary big" data-action="next-game">続ける</button>
+      <span class="hint">次の人がお題を選びます</span>
     </div>`;
 }
 
@@ -1144,6 +1163,7 @@ const tier = createTier({
   nameOf,
   playersOf,
   isHost,
+  isOnline,
   colorAttrs,
   banner,
   toast,
@@ -1234,10 +1254,41 @@ const actions = {
     update((s) => {
       if (s.phase !== 'lobby' || Object.keys(s.players).length < MIN_PLAYERS) return undefined;
       s.game = game;
-      const chooser = nextChooser(s, s.lastChooser);
-      s.phase = 'topic';
-      s.topic = newTopic(chooser);
-      s.lastChooser = chooser;
+      return toTopic(s);
+    });
+  },
+
+  'browse-on'() {
+    update((s) => {
+      if (s.phase !== 'topic') return undefined;
+      s.topic.browse = true;
+      return s;
+    });
+  },
+
+  'browse-off'() {
+    update((s) => {
+      if (s.phase !== 'topic') return undefined;
+      s.topic.browse = false;
+      return s;
+    });
+  },
+
+  'browse-genre'(el) {
+    const genre = el.dataset.id;
+    update((s) => {
+      if (s.phase !== 'topic' || s.topic.step !== 'choose') return undefined;
+      s.topic.genre = genre;
+      return s;
+    });
+  },
+
+  'pick-topic'(el) {
+    const text = titlesFor(state.game, state.topic.genre)[Number(el.dataset.i)];
+    if (!text) return;
+    update((s) => {
+      if (s.phase !== 'topic' || s.topic.step !== 'choose') return undefined;
+      s.topic = { ...newTopic(s.topic.chooser), genre: s.topic.genre, current: text, browse: true };
       return s;
     });
   },
@@ -1262,7 +1313,7 @@ const actions = {
       });
       return;
     }
-    const list = state.game === 'tier' ? tierTitlesFor(genre) : topicsFor(genre);
+    const list = titlesFor(state.game, genre);
     if (list.length === 0) return;
     const options = list.length > 1 ? list.filter((t) => t !== state.topic.current) : list;
     const pick = options[Math.floor(Math.random() * options.length)];
@@ -1358,7 +1409,7 @@ const actions = {
   },
 
   async 'next-game'() {
-    await update(backToLobby);
+    await update((s) => toTopic(backToLobby(s)));
     // 配った数字を消せるのはホストだけ（Tier表では並べる人も次へ進める）
     if (isHost()) store.clearDeal(roomId);
   },
@@ -1410,6 +1461,16 @@ async function dealAndStart() {
   } finally {
     dealing = false;
   }
+}
+
+// 次のお題番でお題選びを始める。人数が足りなければロビーのまま
+function toTopic(s) {
+  if (Object.keys(s.players).length < MIN_PLAYERS) return s;
+  const chooser = nextChooser(s, s.lastChooser);
+  s.phase = 'topic';
+  s.topic = newTopic(chooser);
+  s.lastChooser = chooser;
+  return s;
 }
 
 function backToLobby(s) {
@@ -1570,6 +1631,7 @@ app.addEventListener('click', (e) => {
   }
   const el = e.target.closest('[data-action]');
   if (!el || el.disabled) return;
+  if (el.closest('.tier-picker') && Date.now() - lastDragEnd < 300) return;
   // モーダルの外側（暗い部分）をクリックしたときだけ閉じる
   if (el.classList.contains('modal-back') && e.target !== el) return;
   actions[el.dataset.action]?.(el);
@@ -1606,6 +1668,10 @@ setupDrag({
     if (!on && renderQueued) requestRender();
   },
   onDrop(id, zone, index) {
+    if (zone.startsWith('tier-')) {
+      tier.onDrop(id, zone, index);
+      return;
+    }
     update((s) => {
       if (s.phase !== 'playing' || !s.cards[id]?.played || (s.style === 'all' && !s.wordsOpen)) return undefined;
       s.line = s.line.filter((x) => x !== id);

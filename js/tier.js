@@ -1,5 +1,6 @@
 // Tier表作成ゲーム。
-// 流れ：選択肢を集める（options）→ 並べる人が順位をつける（ranking）→ ほかの人が予想する（predict）→ 答え合わせ（reveal）
+// 流れ：選択肢を集める（options）→ 並べる人が順位をつける（ranking）→ 予想の締め切りを待つ（predict）→ 答え合わせ（reveal）
+// ほかの人は ranking の間から予想を出せる。並べる人が決定し、全員の予想がそろうと答え合わせに進む。
 // 並べる人の答えと各自の予想は、答え合わせまで本人しか読めない場所に保存する（store.js / database.rules.json）。
 
 import { randomId, tierMark, tierScore } from './logic.js';
@@ -9,6 +10,8 @@ const ADD_LIMIT_PRESET = 2; // 用意した選択肢があるお題で、1人が
 const ADD_LIMIT_FREE = 5; // 自由入力のお題で、1人が追加できる数
 // 選択肢の数で難しさが変わらないよう、毎回ちょうどこの数から選ぶ。足したいときは枠を空けて入れ替える
 const OPTION_COUNT = 10;
+
+const GUESSING = ['ranking', 'predict']; // 予想を出せる段階
 
 // お題が決まったら Tier表のゲームを始める。お題番がそのまま並べる人になる
 export function startTier(s) {
@@ -32,7 +35,7 @@ export function startTier(s) {
   return s;
 }
 
-// 全員が予想を出したら答え合わせへ進む
+// 並べる人が決定し、全員が予想を出したら答え合わせへ進む
 function advance(s) {
   const t = s.tier;
   if (t.step === 'predict' && t.predictors.every((id) => t.submitted[id])) {
@@ -58,7 +61,10 @@ export function createTier(ctx) {
   const T = () => S().tier;
   const me = () => ctx.pid();
   const isRanker = () => T()?.ranker === me();
+  const isPredictor = () => !!T()?.predictors.includes(me());
   const who = (id) => (id === me() ? 'あなた' : `${esc(ctx.nameOf(S(), id))} さん`);
+  // めくるのは並べた人。並べた人の通信が切れているときだけ、ホストが代わりにめくれる
+  const canFlip = () => isRanker() || (ctx.isHost() && !ctx.isOnline(T().ranker));
 
   // 自分が組み立て中の順位（まだ保存していない）。ゲームと役割が変わったら作り直す
   let draft = { key: null, order: [] };
@@ -67,6 +73,13 @@ export function createTier(ctx) {
     if (draft.key !== key) draft = { key, order: [] };
     draft.order = draft.order.filter((id) => T().options[id]);
     return draft;
+  }
+
+  // いま自分の順位を動かせるか
+  function canEdit() {
+    const t = T();
+    if (isRanker()) return t.step === 'ranking';
+    return isPredictor() && GUESSING.includes(t.step) && !t.submitted[me()];
   }
 
   const optionList = () => Object.entries(T().options)
@@ -127,9 +140,11 @@ export function createTier(ctx) {
       return;
     }
     if (fx && fx.round === s.round) {
-      if (t.step === 'predict' && fx.step === 'ranking') {
+      if (t.step !== 'options' && fx.step === 'options') ctx.banner(`📝 選択肢が決まりました！${isRanker() ? '順位をつけよう' : '予想を組み立てよう'}`);
+      if (t.step !== 'ranking' && fx.step === 'ranking') {
         ctx.sound.decide();
-        ctx.banner(isRanker() ? '📝 順位を決めました！みんなの予想を待とう' : `📝 ${who(t.ranker)}が並べ終わりました！予想を出そう`);
+        if (isRanker()) ctx.banner('📝 順位を決めました！みんなの予想を待とう');
+        else ctx.banner(`📝 ${who(t.ranker)}が並べ終わりました！${t.submitted[me()] ? '' : '予想を出そう'}`);
       }
       if (t.step === 'reveal' && fx.step === 'predict') {
         ctx.sound.decide();
@@ -137,13 +152,17 @@ export function createTier(ctx) {
       }
       if (t.count > fx.count) ctx.sound.flip();
       if (t.result && !fx.result) {
-        const { winners, perfect } = t.result;
+        const { winners, perfect, scores } = t.result;
         setTimeout(() => {
           if (perfect.length) {
             ctx.banner(`💯 ${perfect.map(who).join('、')}がパーフェクト！`);
             ctx.confetti();
           } else if (winners.length) {
             ctx.banner(`🏆 ${winners.map(who).join('、')}の勝ち！`);
+          } else if (t.predictors.length === 1) {
+            // 予想した人が1人だけのときは勝ち負けがないので、点数だけ知らせる
+            const [only] = t.predictors;
+            ctx.banner(`${who(only)}は ${scores[only] ?? 0}点！`);
           }
           ctx.sound.success();
         }, 500);
@@ -154,33 +173,37 @@ export function createTier(ctx) {
 
   // ---------- 画面 ----------
 
-  function pickerHtml({ locked = false } = {}) {
+  // 順位の枠（上）と選択肢（下）。タップで入れ外しでき、ドラッグでも並べ替えられる
+  function pickerHtml() {
     const t = T();
+    const edit = canEdit();
     const { order } = myDraft();
     const slots = Array.from({ length: t.size }, (_, i) => {
       const id = order[i];
       if (id) {
         return `
-          <li class="slot filled" ${locked ? '' : `data-action="tier-unpick" data-i="${i}"`}>
+          <li class="slot filled" ${edit ? `data-action="tier-unpick" data-i="${i}" data-drag="tier:${id}"` : ''}>
             <span class="rank">${i + 1}位</span><span class="slot-text">${esc(textOf(id))}</span>
-            ${locked ? '' : '<span class="slot-x" aria-hidden="true">×</span>'}
+            ${edit ? '<span class="slot-grip" aria-hidden="true">⠿</span>' : ''}
           </li>`;
       }
-      return `<li class="slot"><span class="rank">${i + 1}位</span><span class="slot-text empty">${i === order.length && !locked ? '下の選択肢をタップ' : ''}</span></li>`;
+      return `<li class="slot"><span class="rank">${i + 1}位</span><span class="slot-text empty">${i === order.length && edit ? 'タップかドラッグで入れる' : ''}</span></li>`;
     }).join('');
     const full = order.length >= t.size;
     const pool = optionList().map((o) => {
       const at = order.indexOf(o.id);
+      const usable = edit && at < 0 && !full;
       return `
-        <button class="opt ${at >= 0 ? 'picked' : ''}" data-action="tier-pick" data-id="${o.id}" ${locked || at >= 0 || full ? 'disabled' : ''}>
+        <button class="opt ${at >= 0 ? 'picked' : ''}" data-action="tier-pick" data-id="${o.id}" ${usable ? `data-drag="tier:${o.id}"` : 'disabled'}>
           ${at >= 0 ? `<b>${at + 1}</b>` : ''}${esc(o.text)}
         </button>`;
     }).join('');
     return `
       <div class="tier-picker">
-        <ol class="tier-slots">${slots}</ol>
-        <div class="tier-pool">${pool}</div>
-      </div>`;
+        <ol class="tier-slots" ${edit ? 'data-zone="tier-slots" data-axis="y"' : ''}>${slots}</ol>
+        <div class="tier-pool" ${edit ? 'data-zone="tier-pool"' : ''}>${pool}</div>
+      </div>
+      ${edit ? '<p class="hint">入れたものはドラッグで並べ替えられます。タップすると外せます</p>' : ''}`;
   }
 
   function bannerHtml() {
@@ -239,50 +262,38 @@ export function createTier(ctx) {
       </div>`;
   }
 
-  function rankingStageHtml() {
+  // 順位を決める・予想する画面（ranking と predict で共通）
+  function guessingStageHtml() {
+    const t = T();
     if (isRanker()) {
+      const deciding = t.step === 'ranking';
       return `
         <div class="panel">
           ${bannerHtml()}
-          <h3>あなたの順位を決める <span class="hint">選択肢をタップすると1位から順に入ります。入れたものをタップすると外せます</span></h3>
+          <h3>${deciding ? 'あなたの順位を決める' : 'みんなが予想しています'} <span class="hint">${deciding ? '選択肢をタップすると1位から順に入ります' : 'あなたの順位は答え合わせまで誰にも見えません'}</span></h3>
           ${pickerHtml()}
-        </div>`;
-    }
-    return `
-      <div class="panel">
-        ${bannerHtml()}
-        <h3>予想を組み立てよう <span class="hint">${who(T().ranker)}が並べています。並べ終わったら予想を出せます</span></h3>
-        ${pickerHtml()}
-      </div>`;
-  }
-
-  function predictStageHtml() {
-    const t = T();
-    if (isRanker()) {
-      return `
-        <div class="panel input-panel">
-          ${bannerHtml()}
-          <h3>みんなが予想しています <span class="hint">あなたの順位は答え合わせまで誰にも見えません</span></h3>
-          ${pickerHtml({ locked: true })}
           ${progressHtml()}
         </div>`;
     }
-    if (!t.predictors.includes(me())) {
-      return `<div class="panel waiting">途中から参加したので、今回は見学です。次のゲームから参加できます。</div>`;
+    if (!isPredictor()) {
+      return '<div class="panel waiting">途中から参加したので、今回は見学です。次のゲームから参加できます。</div>';
     }
     const done = !!t.submitted[me()];
+    const ranking = t.step === 'ranking' ? `${who(t.ranker)}はまだ並べています。先に予想を出してもOKです` : `${who(t.ranker)}は並べ終わりました`;
     return `
       <div class="panel">
         ${bannerHtml()}
-        <h3>${done ? '予想を出しました' : `${who(t.ranker)}の順位を予想しよう`} <span class="hint">${done ? '全員が出すと答え合わせに進みます' : 'ほかの人の予想は答え合わせまで見えません'}</span></h3>
-        ${pickerHtml({ locked: done })}
+        <h3>${done ? '予想を出しました' : `${who(t.ranker)}の順位を予想しよう`} <span class="hint">${done ? '全員がそろうと答え合わせに進みます' : `${ranking}。ほかの人の予想は答え合わせまで見えません`}</span></h3>
+        ${pickerHtml()}
         ${progressHtml()}
       </div>`;
   }
 
+  // 答え合わせ。並べた人の答えを下の順位から開き、開いた選択肢をみんながどこに置いていたかを同時に見せる。
+  // 答えに入っていない予想（×）は、最後まで開いたときにまとめて見せる
   function revealStageHtml() {
     const t = T();
-    if (!answerReady()) return `<div class="panel waiting">答えを読み込んでいます…</div>`;
+    if (!answerReady()) return '<div class="panel waiting">答えを読み込んでいます…</div>';
     const ans = answer.order;
     const n = ans.length;
     const opened = new Set(Array.from({ length: Math.min(t.count, n) }, (_, k) => n - 1 - k));
@@ -303,12 +314,13 @@ export function createTier(ctx) {
       const chips = g.map((id, i) => {
         const at = ans.indexOf(id);
         const open = at >= 0 ? opened.has(at) : done;
+        if (!open) return `<span class="g-chip closed"><span class="rank">${i + 1}</span><span class="g-text">？</span></span>`;
         const m = tierMark(ans, id, i);
-        if (open) points += m.points;
+        points += m.points;
         const cls = { '◎': 'hit', '○': 'near', '△': 'in', '×': 'miss' }[m.mark];
         return `
-          <span class="g-chip ${open ? cls : ''}">
-            <span class="rank">${i + 1}</span><span class="g-text">${esc(textOf(id))}</span>${open ? `<b class="mark">${m.mark}</b>` : ''}
+          <span class="g-chip ${cls}">
+            <span class="rank">${i + 1}</span><span class="g-text">${esc(textOf(id))}</span><b class="mark">${m.mark}</b>
           </span>`;
       }).join('');
       return `
@@ -334,8 +346,7 @@ export function createTier(ctx) {
   function stageHtml() {
     const step = T().step;
     if (step === 'options') return optionsStageHtml();
-    if (step === 'ranking') return rankingStageHtml();
-    if (step === 'predict') return predictStageHtml();
+    if (GUESSING.includes(step)) return guessingStageHtml();
     return revealStageHtml();
   }
 
@@ -349,25 +360,23 @@ export function createTier(ctx) {
         ? `<button class="btn primary big" data-action="tier-close-options" ${n === OPTION_COUNT ? '' : 'disabled'}>これで並べる</button>
            ${n === OPTION_COUNT ? '' : `<span class="hint">選択肢が${OPTION_COUNT}個そろうと押せます（いま${n}個）</span>`}`
         : `<span class="hint">${who(t.ranker)}が締め切ると、並べ始めます</span>`;
-    } else if (t.step === 'ranking') {
-      main = isRanker()
-        ? `<button class="btn primary big" data-action="tier-confirm-rank" ${myDraft().order.length === t.size ? '' : 'disabled'}>この順位で決定</button>
-           <span class="hint">決定すると変えられません</span>`
-        : '<span class="hint">並べ終わるまで、予想は出せません</span>';
-    } else if (t.step === 'predict') {
-      if (t.predictors.includes(me())) {
+    } else if (GUESSING.includes(t.step)) {
+      if (isRanker() && t.step === 'ranking') {
+        main = `<button class="btn primary big" data-action="tier-confirm-rank" ${myDraft().order.length === t.size ? '' : 'disabled'}>この順位で決定</button>
+           <span class="hint">決定すると変えられません</span>`;
+      } else if (isPredictor()) {
         main = t.submitted[me()]
           ? '<button class="btn ghost" data-action="tier-redo-guess">出し直す</button>'
           : `<button class="btn primary big" data-action="tier-submit-guess" ${myDraft().order.length === t.size ? '' : 'disabled'}>予想を出す</button>`;
       }
-      if (ctx.isHost()) main += '<button class="btn" data-action="tier-close-guess">締め切って答え合わせへ</button>';
+      if (ctx.isHost() && t.step === 'predict') main += '<button class="btn" data-action="tier-close-guess">締め切って答え合わせへ</button>';
     } else if (t.count < t.size) {
-      main = lead
+      main = canFlip()
         ? `<button class="btn primary big" data-action="tier-flip" ${answerReady() ? '' : 'disabled'}>めくる（${t.count}/${t.size}）</button>
            <span class="hint">下の順位から1つずつ開きます</span>`
         : `<span class="hint">${who(t.ranker)}がめくっています（${t.count}/${t.size}）</span>`;
     } else {
-      main = lead ? '<button class="btn primary big" data-action="next-game">次のゲームへ</button>' : '';
+      main = lead ? '<button class="btn primary big" data-action="next-game">続ける</button><span class="hint">次の人がお題を選びます</span>' : '';
     }
     const abort = ctx.isHost() ? '<button class="btn ghost" data-action="abort">ゲームをやめてロビーへ</button>' : '';
     if (!main && !abort) return '';
@@ -380,7 +389,7 @@ export function createTier(ctx) {
     if (s.phase !== 'tier' || !s.tier) return '';
     const t = s.tier;
     if (t.ranker === id) return '<span class="chip-sub chooser">📝並べる人</span>';
-    if (t.step === 'predict' && t.predictors.includes(id)) {
+    if (GUESSING.includes(t.step) && t.predictors.includes(id)) {
       return t.submitted[id] ? '<span class="chip-sub done">予想済み</span>' : '<span class="chip-sub">予想中</span>';
     }
     return '';
@@ -391,11 +400,13 @@ export function createTier(ctx) {
   const actions = {
     'tier-pick'(el) {
       const d = myDraft();
+      if (!canEdit()) return;
       if (d.order.length < T().size && !d.order.includes(el.dataset.id)) d.order.push(el.dataset.id);
       ctx.requestRender();
     },
 
     'tier-unpick'(el) {
+      if (!canEdit()) return;
       myDraft().order.splice(Number(el.dataset.i), 1);
       ctx.requestRender();
     },
@@ -412,15 +423,18 @@ export function createTier(ctx) {
       });
     },
 
+    // 選択肢を締め切る。この時点の参加者が予想する人になる
     'tier-close-options'() {
       ctx.update((s) => {
         if (s.phase !== 'tier' || s.tier.step !== 'options' || Object.keys(s.tier.options).length !== OPTION_COUNT) return undefined;
         s.tier.step = 'ranking';
+        s.tier.predictors = ctx.playersOf(s).map((p) => p.id).filter((id) => id !== s.tier.ranker);
+        s.tier.submitted = {};
         return s;
       });
     },
 
-    // 答えを本人しか読めない場所に保存してから、予想に進む
+    // 答えを本人しか読めない場所に保存してから、決定したことを知らせる
     async 'tier-confirm-rank'() {
       const order = [...myDraft().order];
       if (!isRanker() || T().step !== 'ranking' || order.length !== T().size) return;
@@ -433,8 +447,6 @@ export function createTier(ctx) {
       await ctx.update((s) => {
         if (s.phase !== 'tier' || s.tier.step !== 'ranking') return undefined;
         s.tier.step = 'predict';
-        s.tier.predictors = ctx.playersOf(s).map((p) => p.id).filter((id) => id !== s.tier.ranker);
-        s.tier.submitted = {};
         return advance(s);
       });
     },
@@ -443,7 +455,7 @@ export function createTier(ctx) {
       const t = T();
       const order = [...myDraft().order];
       const uid = me();
-      if (t.step !== 'predict' || !t.predictors.includes(uid) || order.length !== t.size) return;
+      if (!GUESSING.includes(t.step) || !isPredictor() || order.length !== t.size) return;
       try {
         await ctx.store.setTierGuess(ctx.roomId(), uid, { round: S().round, order });
       } catch (err) {
@@ -451,7 +463,7 @@ export function createTier(ctx) {
         return;
       }
       await ctx.update((s) => {
-        if (s.phase !== 'tier' || s.tier.step !== 'predict') return undefined;
+        if (s.phase !== 'tier' || !GUESSING.includes(s.tier.step)) return undefined;
         s.tier.submitted[uid] = true;
         return advance(s);
       });
@@ -460,7 +472,7 @@ export function createTier(ctx) {
     'tier-redo-guess'() {
       const uid = me();
       ctx.update((s) => {
-        if (s.phase !== 'tier' || s.tier.step !== 'predict') return undefined;
+        if (s.phase !== 'tier' || !GUESSING.includes(s.tier.step)) return undefined;
         delete s.tier.submitted[uid];
         return s;
       });
@@ -476,9 +488,10 @@ export function createTier(ctx) {
       });
     },
 
-    // 1つめくる。最後の1つをめくったら点数を集計し、一番高い人に1勝を付ける
+    // 1つめくる。最後の1つをめくったら点数を集計する。
+    // 予想した人が2人以上いるときだけ、一番高い人に1勝を付ける（1人だと勝ち負けにならない）
     'tier-flip'() {
-      if (!answerReady()) return;
+      if (!answerReady() || !canFlip()) return;
       const ans = answer.order;
       const gs = currentGuesses();
       ctx.update((s) => {
@@ -488,7 +501,7 @@ export function createTier(ctx) {
         if (t.count >= t.size) {
           const scores = Object.fromEntries(t.predictors.map((id) => [id, gs[id] ? tierScore(ans, gs[id]) : 0]));
           const max = Math.max(0, ...Object.values(scores));
-          const winners = max > 0 ? Object.keys(scores).filter((id) => scores[id] === max) : [];
+          const winners = t.predictors.length >= 2 && max > 0 ? Object.keys(scores).filter((id) => scores[id] === max) : [];
           winners.forEach((id) => { s.wins[id] = (s.wins[id] ?? 0) + 1; });
           t.result = { scores, winners, perfect: Object.keys(scores).filter((id) => scores[id] === t.size * 3) };
         }
@@ -518,12 +531,27 @@ export function createTier(ctx) {
     },
   };
 
+  // ドラッグで離したとき。順位の枠に入れる・枠の中で並べ替える・選択肢に戻す
+  function onDrop(dragId, zone, index) {
+    const id = dragId.replace(/^tier:/, '');
+    if (!canEdit() || !T().options[id]) return;
+    const d = myDraft();
+    const rest = d.order.filter((x) => x !== id);
+    if (zone === 'tier-slots') {
+      if (rest.length >= T().size) return;
+      rest.splice(Math.min(index, rest.length), 0, id);
+    }
+    d.order = rest;
+    ctx.requestRender();
+  }
+
   return {
     stageHtml,
     controlsHtml,
     chipStatus,
     actions,
     forms,
+    onDrop,
     onRender() {
       sync();
       effects();
