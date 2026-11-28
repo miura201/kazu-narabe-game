@@ -103,3 +103,11 @@ export function tierMark(answer, item, index) {
 export function tierScore(answer, guess) {
   return guess.reduce((sum, item, i) => sum + tierMark(answer, item, i).points, 0);
 }
+
+// 相性診断：2人の順位がどれだけ近いか。点数の付け方は予想と同じで、どちらから見ても同じ点数になる
+export function matchScore(a, b) {
+  return tierScore(a, b);
+}
+
+// 2人組のキー（順番によらず同じになる）
+export const pairKey = (a, b) => (a < b ? `${a}_${b}` : `${b}_${a}`);

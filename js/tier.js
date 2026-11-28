@@ -1,9 +1,13 @@
-// Tier表作成ゲーム。
-// 流れ：選択肢を集める（options）→ 並べる人が順位をつける（ranking）→ 予想の締め切りを待つ（predict）→ 答え合わせ（reveal）
-// ほかの人は ranking の間から予想を出せる。並べる人が決定し、全員の予想がそろうと答え合わせに進む。
+// Tier表作成ゲーム。モードは2つ。
+//   当てる（guess）：並べる人の順位をほかの人が予想する。
+//     選択肢を集める（options）→ 並べる人が順位をつける（ranking）→ 予想の締め切りを待つ（predict）→ 答え合わせ（reveal）
+//     ほかの人は ranking の間から予想を出せる。並べる人が決定し、全員の予想がそろうと答え合わせに進む。
+//   相性診断（match）：全員が自分の順位をつけ、2人ずつの近さを貯めていく。決めた回数で結果発表。
+//     選択肢を集める（options）→ 全員が順位をつける（ranking）→ 公開（reveal）
+//     ranker はお題番（選択肢の締め切りとめくる係）で、本人も順位をつける。
 // 並べる人の答えと各自の予想は、答え合わせまで本人しか読めない場所に保存する（store.js / database.rules.json）。
 
-import { randomId, tierMark, tierScore } from './logic.js';
+import { randomId, tierMark, tierScore, matchScore, pairKey } from './logic.js';
 import { tierOptionsFor } from './tier-topics.js';
 
 const ADD_LIMIT_PRESET = 2; // 用意した選択肢があるお題で、1人が追加できる数（並べる人は無制限）
@@ -22,6 +26,7 @@ export function startTier(s) {
   s.phase = 'tier';
   s.round += 1;
   s.tier = {
+    mode: s.tierMode === 'match' ? 'match' : 'guess',
     ranker: s.topic.chooser ?? s.hostId,
     free: Object.keys(options).length === 0,
     size: s.settings.tierCount,
@@ -35,10 +40,12 @@ export function startTier(s) {
   return s;
 }
 
-// 並べる人が決定し、全員が予想を出したら答え合わせへ進む
+// 当てる：並べる人が決定し、全員が予想を出したら答え合わせへ進む
+// 相性診断：全員が順位を決めたら公開へ進む
 function advance(s) {
   const t = s.tier;
-  if (t.step === 'predict' && t.predictors.every((id) => t.submitted[id])) {
+  const ready = t.mode === 'match' ? t.step === 'ranking' && t.predictors.length > 0 : t.step === 'predict';
+  if (ready && t.predictors.every((id) => t.submitted[id])) {
     t.step = 'reveal';
     t.count = 0;
   }
@@ -48,8 +55,12 @@ function advance(s) {
 // 部屋から人が抜けたとき。並べる人が抜けたら続けられないので false を返す（ロビーに戻す）
 export function tierRemovePlayer(s, id) {
   if (s.phase !== 'tier' || !s.tier) return true;
-  if (s.tier.ranker === id) return false;
   s.tier.predictors = s.tier.predictors.filter((x) => x !== id);
+  if (s.tier.ranker === id) {
+    // 相性診断のお題番は進行係なので、残った人に引き継ぐ
+    if (s.tier.mode !== 'match') return false;
+    s.tier.ranker = s.tier.predictors[0] ?? s.hostId;
+  }
   delete s.tier.submitted[id];
   advance(s);
   return true;
@@ -60,11 +71,15 @@ export function createTier(ctx) {
   const S = () => ctx.state();
   const T = () => S().tier;
   const me = () => ctx.pid();
-  const isRanker = () => T()?.ranker === me();
+  const isMatch = () => T()?.mode === 'match';
+  // 当てるモードで順位を当てられる人。相性診断では全員が順位をつける側なので、誰も当てはまらない
+  const isRanker = () => !isMatch() && T()?.ranker === me();
+  // 選択肢の締め切りとめくる係（当てる：並べる人、相性診断：お題番）
+  const isLead = () => T()?.ranker === me();
   const isPredictor = () => !!T()?.predictors.includes(me());
   const who = (id) => (id === me() ? 'あなた' : `${esc(ctx.nameOf(S(), id))} さん`);
-  // めくるのは並べた人。並べた人の通信が切れているときだけ、ホストが代わりにめくれる
-  const canFlip = () => isRanker() || (ctx.isHost() && !ctx.isOnline(T().ranker));
+  // めくるのは係の人。係の人の通信が切れているときだけ、ホストが代わりにめくれる
+  const canFlip = () => isLead() || (ctx.isHost() && !ctx.isOnline(T().ranker));
 
   // 自分が組み立て中の順位（まだ保存していない）。ゲームと役割が変わったら作り直す
   let draft = { key: null, order: [] };
@@ -78,6 +93,7 @@ export function createTier(ctx) {
   // いま自分の順位を動かせるか
   function canEdit() {
     const t = T();
+    if (isMatch()) return isPredictor() && t.step === 'ranking' && !t.submitted[me()];
     if (isRanker()) return t.step === 'ranking';
     return isPredictor() && GUESSING.includes(t.step) && !t.submitted[me()];
   }
@@ -100,7 +116,7 @@ export function createTier(ctx) {
     if (s.phase === 'tier' && s.tier?.step === 'reveal') {
       // 自分の操作で答え合わせになった直後は、サーバーに届く前で読む許可がまだないことがある。少し待ってやり直す
       const retry = () => setTimeout(ctx.requestRender, 1000);
-      unsubAnswer ??= ctx.store.subscribeTierAnswer(ctx.roomId(), (v) => {
+      if (!isMatch()) unsubAnswer ??= ctx.store.subscribeTierAnswer(ctx.roomId(), (v) => {
         answer = v;
         ctx.requestRender();
       }, () => { unsubAnswer = null; retry(); });
@@ -119,7 +135,8 @@ export function createTier(ctx) {
     }
   }
 
-  const answerReady = () => !!answer && answer.round === S().round && guessesLoaded;
+  // 相性診断は全員の順位（予想と同じ場所）だけを使う
+  const answerReady = () => guessesLoaded && (isMatch() || (!!answer && answer.round === S().round));
   // このゲームの予想だけ { uid: [選択肢ID…] }
   function currentGuesses() {
     const out = {};
@@ -132,14 +149,23 @@ export function createTier(ctx) {
   // ---------- 演出 ----------
 
   let fx = null;
+  let lastPhase = null;
   function effects() {
     const s = S();
+    if (s.phase === 'matchResult' && lastPhase && lastPhase !== 'matchResult') {
+      ctx.banner('🤝 結果発表！');
+      ctx.confetti();
+      ctx.sound.success();
+    }
+    lastPhase = s.phase;
     const t = s.tier;
     if (s.phase !== 'tier' || !t) {
       fx = null;
       return;
     }
-    if (fx && fx.round === s.round) {
+    if (fx && fx.round === s.round && t.mode === 'match') {
+      matchEffects(t);
+    } else if (fx && fx.round === s.round) {
       if (t.step !== 'options' && fx.step === 'options') ctx.banner(`📝 選択肢が決まりました！${isRanker() ? '順位をつけよう' : '予想を組み立てよう'}`);
       if (t.step !== 'ranking' && fx.step === 'ranking') {
         ctx.sound.decide();
@@ -169,6 +195,41 @@ export function createTier(ctx) {
       }
     }
     fx = { round: s.round, step: t.step, count: t.count, result: !!t.result };
+  }
+
+  // 相性診断：1段めくるたびに、その順位が全員一致していたら知らせる。最後に全体の演出
+  function matchEffects(t) {
+    if (t.step === 'ranking' && fx.step === 'options') ctx.banner('🤝 選択肢が決まりました！自分の順位をつけよう');
+    if (t.step === 'reveal' && fx.step === 'ranking') {
+      ctx.sound.decide();
+      ctx.banner('🔍 全員そろいました！公開します');
+    }
+    if (t.count > fx.count) {
+      ctx.sound.flip();
+      const gs = currentGuesses();
+      const rank = t.size - t.count; // いま開いた順位（0 始まり）
+      const items = t.predictors.map((id) => gs[id]?.[rank]).filter(Boolean);
+      const same = items.length >= 2 && items.length === t.predictors.length && items.every((x) => x === items[0]);
+      if (same && !t.result) ctx.banner(`✨ ${rank + 1}位は全員一致！`);
+    }
+    if (t.result && !fx.result) {
+      const { allSame, firstSame, destiny } = t.result;
+      setTimeout(() => {
+        if (allSame) {
+          ctx.banner('🎉 全員の順位が完全一致！');
+          ctx.confetti();
+          ctx.sound.success();
+        } else if (destiny.length) {
+          const names = destiny.map((k) => k.split('_').map(who).join(' と ')).join('、');
+          ctx.banner(`💘 運命の2人：${names}`);
+          ctx.confetti();
+          ctx.sound.success();
+        } else if (firstSame) {
+          ctx.banner('✨ 1位は全員一致！');
+          ctx.sound.success();
+        }
+      }, 500);
+    }
   }
 
   // ---------- 画面 ----------
@@ -208,6 +269,14 @@ export function createTier(ctx) {
 
   function bannerHtml() {
     const t = T();
+    if (isMatch()) {
+      const m = S().match;
+      const total = S().settings.matchRounds;
+      return `
+      <div class="chooser-banner">
+        🤝 相性診断 <b>${(m?.rounds ?? 0) + (t.result ? 0 : 1)}回目</b>${total ? ` / ${total}回` : ''}　<span class="banner-sub">お題番：${who(t.ranker)}・全員が上位${t.size}つを選んで順位をつけます</span>
+      </div>`;
+    }
     return `
       <div class="chooser-banner ${isRanker() ? 'me' : ''}">
         📝 並べる人：<b>${who(t.ranker)}</b>　<span class="banner-sub">上位${t.size}つを選んで順位をつけます</span>
@@ -219,17 +288,17 @@ export function createTier(ctx) {
     const opts = optionList();
     const mine = opts.filter((o) => o.by === me()).length;
     const limit = t.free ? ADD_LIMIT_FREE : ADD_LIMIT_PRESET;
-    const canAdd = (isRanker() || mine < limit) && opts.length < OPTION_COUNT;
-    const canDelete = (o) => isRanker() || ctx.isHost() || o.by === me();
+    const canAdd = (isLead() || mine < limit) && opts.length < OPTION_COUNT;
+    const canDelete = (o) => isLead() || ctx.isHost() || o.by === me();
     const full = opts.length >= OPTION_COUNT;
     let hint;
-    if (isRanker()) {
+    if (isLead()) {
       hint = full
         ? `選択肢は${OPTION_COUNT}個です。入れ替えたいときは×で消すと、空いた枠にみんなが足せます`
         : `あと${OPTION_COUNT - opts.length}個そろえてください`;
     } else {
       hint = full
-        ? `選択肢は${OPTION_COUNT}個です。足したいときは、並べる人に1つ消してもらいましょう`
+        ? `選択肢は${OPTION_COUNT}個です。足したいときは、${isMatch() ? 'お題番' : '並べる人'}に1つ消してもらいましょう`
         : `空いた枠に選択肢を足せます（あなたはあと${Math.max(0, limit - mine)}個）`;
     }
     return `
@@ -255,7 +324,7 @@ export function createTier(ctx) {
     const t = T();
     return `
       <div class="progress">
-        <div class="progress-label">予想済み ${t.predictors.filter((id) => t.submitted[id]).length}/${t.predictors.length}人</div>
+        <div class="progress-label">${isMatch() ? '決定済み' : '予想済み'} ${t.predictors.filter((id) => t.submitted[id]).length}/${t.predictors.length}人</div>
         <div class="progress-row">
           ${t.predictors.map((id) => `<span class="progress-chip ${t.submitted[id] ? 'done' : ''}">${t.submitted[id] ? '✓' : '…'} ${esc(ctx.nameOf(S(), id))}</span>`).join('')}
         </div>
@@ -265,6 +334,17 @@ export function createTier(ctx) {
   // 順位を決める・予想する画面（ranking と predict で共通）
   function guessingStageHtml() {
     const t = T();
+    if (isMatch()) {
+      if (!isPredictor()) return '<div class="panel waiting">途中から参加したので、今回は見学です。次のゲームから参加できます。</div>';
+      const done = !!t.submitted[me()];
+      return `
+        <div class="panel">
+          ${bannerHtml()}
+          <h3>${done ? '順位を決めました' : 'あなたの順位をつけよう'} <span class="hint">${done ? '全員がそろうと公開します' : 'ほかの人の順位は、全員がそろうまで見えません'}</span></h3>
+          ${pickerHtml()}
+          ${progressHtml()}
+        </div>`;
+    }
     if (isRanker()) {
       const deciding = t.step === 'ranking';
       return `
@@ -343,38 +423,92 @@ export function createTier(ctx) {
       </div>`;
   }
 
+  // 相性診断の公開。全員の順位を1人1行で並べ、下の順位から1段ずつ開く。
+  // 同じ順位に同じものを置いた人が2人以上いたら、その選択肢に色を付けてつながりが見えるようにする
+  function matchRevealHtml() {
+    const t = T();
+    if (!answerReady()) return '<div class="panel waiting">みんなの順位を読み込んでいます…</div>';
+    const gs = currentGuesses();
+    const n = t.size;
+    const opened = new Set(Array.from({ length: Math.min(t.count, n) }, (_, k) => n - 1 - k));
+    // 順位ごとに、2人以上が置いた選択肢に色番号を振る
+    const shared = Array.from({ length: n }, (_, r) => {
+      const counts = {};
+      t.predictors.forEach((id) => {
+        const x = gs[id]?.[r];
+        if (x) counts[x] = (counts[x] ?? 0) + 1;
+      });
+      const tags = {};
+      Object.keys(counts).filter((x) => counts[x] >= 2).forEach((x, i) => { tags[x] = i % 4; });
+      return tags;
+    });
+    const rows = t.predictors.map((uid) => {
+      const g = gs[uid];
+      const color = ctx.colorAttrs(S(), uid);
+      const chips = g
+        ? g.map((id, i) => {
+          if (!opened.has(i)) return `<span class="g-chip closed"><span class="rank">${i + 1}</span><span class="g-text">？</span></span>`;
+          const tag = shared[i][id];
+          return `<span class="g-chip ${tag !== undefined ? `same same-${tag}` : ''}"><span class="rank">${i + 1}</span><span class="g-text">${esc(textOf(id))}</span></span>`;
+        }).join('')
+        : '<span class="hint">順位なし</span>';
+      return `
+        <div class="g-row match-row">
+          <div class="g-name" style="${color.style}">${esc(ctx.nameOf(S(), uid))}</div>
+          <div class="g-chips">${chips}</div>
+        </div>`;
+    }).join('');
+    return `
+      <div class="panel">
+        ${bannerHtml()}
+        <div class="ans-head">みんなの順位 <span class="hint">同じ順位に同じものを置いた人どうしは、同じ色で光ります</span></div>
+        ${rows}
+      </div>`;
+  }
+
   function stageHtml() {
     const step = T().step;
     if (step === 'options') return optionsStageHtml();
     if (GUESSING.includes(step)) return guessingStageHtml();
-    return revealStageHtml();
+    return isMatch() ? matchRevealHtml() : revealStageHtml();
   }
 
   function controlsHtml() {
     const t = T();
-    const lead = isRanker() || ctx.isHost();
+    const lead = isLead() || ctx.isHost();
     let main = '';
     if (t.step === 'options') {
       const n = Object.keys(t.options).length;
       main = lead
         ? `<button class="btn primary big" data-action="tier-close-options" ${n === OPTION_COUNT ? '' : 'disabled'}>これで並べる</button>
            ${n === OPTION_COUNT ? '' : `<span class="hint">選択肢が${OPTION_COUNT}個そろうと押せます（いま${n}個）</span>`}`
-        : `<span class="hint">${who(t.ranker)}が締め切ると、並べ始めます</span>`;
+        : `<span class="hint">${who(t.ranker)}が締め切ると、${isMatch() ? '順位をつけ始めます' : '並べ始めます'}</span>`;
     } else if (GUESSING.includes(t.step)) {
       if (isRanker() && t.step === 'ranking') {
         main = `<button class="btn primary big" data-action="tier-confirm-rank" ${myDraft().order.length === t.size ? '' : 'disabled'}>この順位で決定</button>
            <span class="hint">決定すると変えられません</span>`;
       } else if (isPredictor()) {
         main = t.submitted[me()]
-          ? '<button class="btn ghost" data-action="tier-redo-guess">出し直す</button>'
-          : `<button class="btn primary big" data-action="tier-submit-guess" ${myDraft().order.length === t.size ? '' : 'disabled'}>予想を出す</button>`;
+          ? `<button class="btn ghost" data-action="tier-redo-guess">${isMatch() ? '決め直す' : '出し直す'}</button>`
+          : `<button class="btn primary big" data-action="tier-submit-guess" ${myDraft().order.length === t.size ? '' : 'disabled'}>${isMatch() ? 'この順位で決定' : '予想を出す'}</button>`;
       }
-      if (ctx.isHost() && t.step === 'predict') main += '<button class="btn" data-action="tier-close-guess">締め切って答え合わせへ</button>';
+      if (ctx.isHost() && t.step === (isMatch() ? 'ranking' : 'predict')) {
+        main += `<button class="btn" data-action="tier-close-guess">${isMatch() ? '締め切って公開' : '締め切って答え合わせへ'}</button>`;
+      }
     } else if (t.count < t.size) {
       main = canFlip()
         ? `<button class="btn primary big" data-action="tier-flip" ${answerReady() ? '' : 'disabled'}>めくる（${t.count}/${t.size}）</button>
            <span class="hint">下の順位から1つずつ開きます</span>`
         : `<span class="hint">${who(t.ranker)}がめくっています（${t.count}/${t.size}）</span>`;
+    } else if (isMatch()) {
+      const total = S().settings.matchRounds;
+      const finished = total && (S().match?.rounds ?? 0) >= total;
+      if (finished) {
+        main = lead ? '<button class="btn primary big" data-action="match-result">結果発表へ</button>' : '<span class="hint">まもなく結果発表です</span>';
+      } else {
+        main = lead ? '<button class="btn primary big" data-action="next-game">続ける</button><span class="hint">次の人がお題を選びます</span>' : '';
+        if (ctx.isHost()) main += '<button class="btn" data-action="match-result">ここで結果発表</button>';
+      }
     } else {
       main = lead ? '<button class="btn primary big" data-action="next-game">続ける</button><span class="hint">次の人がお題を選びます</span>' : '';
     }
@@ -388,10 +522,13 @@ export function createTier(ctx) {
     const s = S();
     if (s.phase !== 'tier' || !s.tier) return '';
     const t = s.tier;
-    if (t.ranker === id) return '<span class="chip-sub chooser">📝並べる人</span>';
+    const lead = t.ranker === id ? `<span class="chip-sub chooser">${t.mode === 'match' ? '🎲お題番' : '📝並べる人'}</span>` : '';
+    if (t.mode !== 'match' && lead) return lead;
     if (GUESSING.includes(t.step) && t.predictors.includes(id)) {
-      return t.submitted[id] ? '<span class="chip-sub done">予想済み</span>' : '<span class="chip-sub">予想中</span>';
+      const label = t.mode === 'match' ? ['決定済み', '考え中'] : ['予想済み', '予想中'];
+      return lead + (t.submitted[id] ? `<span class="chip-sub done">${label[0]}</span>` : `<span class="chip-sub">${label[1]}</span>`);
     }
+    if (lead) return lead;
     return '';
   }
 
@@ -428,7 +565,8 @@ export function createTier(ctx) {
       ctx.update((s) => {
         if (s.phase !== 'tier' || s.tier.step !== 'options' || Object.keys(s.tier.options).length !== OPTION_COUNT) return undefined;
         s.tier.step = 'ranking';
-        s.tier.predictors = ctx.playersOf(s).map((p) => p.id).filter((id) => id !== s.tier.ranker);
+        // 相性診断はお題番も順位をつける
+        s.tier.predictors = ctx.playersOf(s).map((p) => p.id).filter((id) => s.tier.mode === 'match' || id !== s.tier.ranker);
         s.tier.submitted = {};
         return s;
       });
@@ -481,7 +619,7 @@ export function createTier(ctx) {
     // 予想を出していない人がいても、ホストは締め切れる（その人は0点）
     'tier-close-guess'() {
       ctx.update((s) => {
-        if (s.phase !== 'tier' || s.tier.step !== 'predict') return undefined;
+        if (s.phase !== 'tier' || s.tier.step !== (s.tier.mode === 'match' ? 'ranking' : 'predict')) return undefined;
         s.tier.step = 'reveal';
         s.tier.count = 0;
         return s;
@@ -492,13 +630,15 @@ export function createTier(ctx) {
     // 予想した人が2人以上いるときだけ、一番高い人に1勝を付ける（1人だと勝ち負けにならない）
     'tier-flip'() {
       if (!answerReady() || !canFlip()) return;
-      const ans = answer.order;
+      const ans = isMatch() ? null : answer.order; // 相性診断には並べる人の答えがない
       const gs = currentGuesses();
       ctx.update((s) => {
         const t = s.tier;
         if (s.phase !== 'tier' || t.step !== 'reveal' || t.count >= t.size) return undefined;
         t.count += 1;
-        if (t.count >= t.size) {
+        if (t.count >= t.size && t.mode === 'match') {
+          tallyMatch(s, gs);
+        } else if (t.count >= t.size) {
           const scores = Object.fromEntries(t.predictors.map((id) => [id, gs[id] ? tierScore(ans, gs[id]) : 0]));
           const max = Math.max(0, ...Object.values(scores));
           const winners = t.predictors.length >= 2 && max > 0 ? Object.keys(scores).filter((id) => scores[id] === max) : [];
@@ -509,6 +649,109 @@ export function createTier(ctx) {
       });
     },
   };
+
+  // 相性診断：2人ずつの近さを貯める。全員一致・1位一致・完全一致の2人組は演出用に残す
+  function tallyMatch(s, gs) {
+    const t = s.tier;
+    const ids = t.predictors.filter((id) => gs[id]?.length);
+    const full = t.size * 3;
+    s.match ??= { rounds: 0, pairs: {} };
+    s.match.rounds += 1;
+    const destiny = [];
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        const key = pairKey(ids[i], ids[j]);
+        const score = matchScore(gs[ids[i]], gs[ids[j]]);
+        const p = s.match.pairs[key] ?? { sum: 0, max: 0 };
+        s.match.pairs[key] = { sum: p.sum + score, max: p.max + full };
+        if (score === full) destiny.push(key);
+      }
+    }
+    const pairCount = (ids.length * (ids.length - 1)) / 2;
+    t.result = {
+      allSame: ids.length >= 3 && destiny.length === pairCount,
+      firstSame: ids.length >= 2 && ids.every((id) => gs[id][0] === gs[ids[0]][0]),
+      destiny,
+    };
+  }
+
+  // ---------- 相性診断の結果発表 ----------
+
+  const pct = (p) => (p.max ? Math.round((p.sum / p.max) * 100) : 0);
+
+  function pairNames(a, b) {
+    const name = (id) => `<span class="pair-name" style="${ctx.colorAttrs(S(), id).style}">${esc(ctx.nameOf(S(), id))}</span>`;
+    return `${name(a)}<span class="pair-and">×</span>${name(b)}`;
+  }
+
+  function pairRow(p, label = '') {
+    return `
+      <div class="pair-row">
+        <span class="pair-label">${label}</span>
+        <span class="pair-names">${pairNames(p.a, p.b)}</span>
+        <span class="pair-bar"><i style="width:${p.pct}%"></i></span>
+        <b class="pair-pct">${p.pct}%</b>
+      </div>`;
+  }
+
+  function matchResultHtml() {
+    const s = S();
+    const m = s.match ?? { rounds: 0, pairs: {} };
+    const present = new Set(Object.keys(s.players));
+    // 退出した人を含む組は出さない
+    const pairs = Object.entries(m.pairs)
+      .map(([k, p]) => {
+        const [a, b] = k.split('_');
+        return { a, b, pct: pct(p) };
+      })
+      .filter((p) => present.has(p.a) && present.has(p.b))
+      .sort((x, y) => y.pct - x.pct);
+    let body;
+    if (pairs.length === 0) {
+      body = '<p class="hint">まだ診断した組がありません</p>';
+    } else if (pairs.length === 1) {
+      body = `
+        <div class="duo">
+          <div class="duo-names">${pairNames(pairs[0].a, pairs[0].b)}</div>
+          <div class="duo-pct">${pairs[0].pct}<small>%</small></div>
+          <div class="hint">2人の相性（${m.rounds}回の平均）</div>
+        </div>`;
+    } else {
+      const medals = ['🥇', '🥈', '🥉'];
+      const best = pairs.slice(0, 3).map((p, i) => pairRow(p, medals[i])).join('');
+      const worst = pairs.length > 3 ? pairRow(pairs[pairs.length - 1], '💔') : '';
+      // 各自の一番相性がいい人
+      const each = ctx.playersOf(s).map((pl) => {
+        const mine = pairs.filter((p) => p.a === pl.id || p.b === pl.id);
+        if (!mine.length) return '';
+        const top = mine[0];
+        const other = top.a === pl.id ? top.b : top.a;
+        return `<li>${pairNames(pl.id, other)} <b>${top.pct}%</b></li>`;
+      }).join('');
+      body = `
+        <h4>相性ベスト3</h4>
+        ${best}
+        ${worst ? `<h4>相性ワースト</h4>${worst}` : ''}
+        <h4>それぞれの一番相性がいい人</h4>
+        <ul class="each-best">${each}</ul>`;
+    }
+    return `
+      <div class="panel match-result">
+        <div class="result-title">🤝 相性診断の結果</div>
+        <p class="hint">${m.rounds}回分の答えから計算しました</p>
+        ${body}
+      </div>`;
+  }
+
+  function matchResultControlsHtml() {
+    if (!ctx.isHost()) return '<div class="panel waiting">ホストが次に遊ぶものを選んでいます…</div>';
+    return `
+      <div class="panel host-panel row">
+        <button class="btn primary big" data-action="match-again">もう一度診断する</button>
+        <span class="hint">相性はリセットされます</span>
+        <button class="btn ghost" data-action="abort">ロビーに戻る</button>
+      </div>`;
+  }
 
   const forms = {
     'tier-add-option'(form) {
@@ -548,6 +791,8 @@ export function createTier(ctx) {
   return {
     stageHtml,
     controlsHtml,
+    matchResultHtml,
+    matchResultControlsHtml,
     chipStatus,
     actions,
     forms,

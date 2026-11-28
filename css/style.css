@@ -807,3 +807,66 @@ input:focus, select:focus { outline: none; border-color: var(--indigo); }
 .topic-item:hover:not(:disabled) { background: #fff6ec; }
 .topic-item:disabled { cursor: default; border-color: var(--line); }
 .topic-item.selected { background: var(--accent); color: #fff; border-color: var(--ink); }
+
+/* ---------- Tier表：モードの分岐・相性診断 ---------- */
+
+.game-box.with-modes { cursor: default; }
+.game-box.with-modes:hover { background: #fff; }
+.game-box.with-modes:active { transform: none; box-shadow: 0 5px 0 var(--ink); }
+.mode-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; margin-top: 6px; }
+.mode-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px;
+  border: 2px solid var(--ink);
+  border-radius: 10px;
+  background: #fff6ec;
+  box-shadow: 0 3px 0 var(--ink);
+  cursor: pointer;
+  text-align: left;
+}
+.mode-btn span { font-size: .75rem; color: var(--muted); line-height: 1.4; }
+.mode-btn:hover:not(:disabled) { background: #ffe9dc; }
+.mode-btn:active:not(:disabled) { transform: translateY(3px); box-shadow: 0 0 0 var(--ink); }
+.mode-btn:disabled { cursor: default; box-shadow: none; border-color: var(--line); background: #fff; }
+
+/* 同じ順位に同じものを置いた人どうし */
+.g-chip.same { font-weight: 800; }
+.g-chip.same-0 { border-color: var(--ok); background: #effaf4; }
+.g-chip.same-1 { border-color: var(--indigo); background: #f2f1ff; }
+.g-chip.same-2 { border-color: var(--off); background: #fff8e6; }
+.g-chip.same-3 { border-color: var(--accent); background: #fff1ee; }
+.match-row { grid-template-columns: 7em 1fr; }
+
+/* 結果発表 */
+.match-result { text-align: center; }
+.match-result h4 { margin: 20px 0 8px; }
+.pair-row {
+  display: grid;
+  grid-template-columns: 2em minmax(0, 1fr) minmax(60px, 160px) 3.5em;
+  gap: 10px;
+  align-items: center;
+  max-width: 620px;
+  margin: 6px auto;
+  text-align: left;
+}
+.pair-label { font-size: 1.3rem; }
+.pair-names { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-weight: 800; }
+.pair-name { border-bottom: 4px solid var(--pc); }
+.pair-and { color: var(--muted); font-weight: 400; margin: 0 2px; }
+.pair-bar { height: 10px; background: var(--line); border-radius: 999px; overflow: hidden; }
+.pair-bar i { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+.pair-pct { font-size: 1.2rem; text-align: right; }
+.each-best { list-style: none; padding: 0; margin: 0 auto; max-width: 620px; display: flex; flex-wrap: wrap; gap: 8px 18px; justify-content: center; }
+.duo { margin: 16px 0; }
+.duo-names { font-size: 1.3rem; display: flex; justify-content: center; gap: 6px; }
+.duo-pct { font-size: 4rem; font-weight: 800; color: var(--accent); line-height: 1.1; }
+.duo-pct small { font-size: 1.6rem; }
+
+@media (max-width: 600px) {
+  .mode-buttons { grid-template-columns: 1fr; }
+  .match-row { grid-template-columns: 1fr; }
+  .pair-row { grid-template-columns: 2em 1fr 3.5em; }
+  .pair-bar { grid-column: 2 / 4; grid-row: 2; }
+}

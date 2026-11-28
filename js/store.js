@@ -66,6 +66,13 @@ function normalize(s) {
   if (s.topic.spin) s.topic.spin.items = toArray(s.topic.spin.items);
   s.reveal ??= null;
   s.settings.tierCount ??= 5;
+  s.settings.matchRounds ??= 5; // 相性診断で結果発表までの回数。0 はエンドレス
+  s.tierMode ??= 'guess';
+  s.match ??= null;
+  if (s.match) {
+    s.match.rounds ??= 0;
+    s.match.pairs ??= {};
+  }
   s.wins ??= {};
   s.tier ??= null;
   if (s.tier) {
@@ -78,6 +85,7 @@ function normalize(s) {
       s.tier.result.scores ??= {};
       s.tier.result.winners = toArray(s.tier.result.winners);
       s.tier.result.perfect = toArray(s.tier.result.perfect);
+      s.tier.result.destiny = toArray(s.tier.result.destiny);
     }
   }
   return s;

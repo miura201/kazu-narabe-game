@@ -670,6 +670,7 @@ function stageHtml() {
   const s = state;
   if (s.phase === 'lobby') return lobbyStageHtml();
   if (s.phase === 'tier') return tier.stageHtml();
+  if (s.phase === 'matchResult') return tier.matchResultHtml();
   if (s.phase === 'topic') {
     if (s.topic.step === 'input') return inputStageHtml();
     if (s.topic.step === 'vote') return voteStageHtml();
@@ -681,7 +682,16 @@ function stageHtml() {
 // 遊ぶゲームを選ぶ。選べるのはホスト
 const GAMES = [
   { id: 'kazu', icon: '🔢', name: '数並べ', desc: '配られた数字（1〜100）をお題に沿ったひとことで表して、みんなで小さい順に並べる協力ゲーム' },
-  { id: 'tier', icon: '🏆', name: 'Tier表作成', desc: '1人がお題の選択肢を順位づけ。ほかの人は、その人がどれをどの順に選んだかを予想する' },
+  {
+    id: 'tier',
+    icon: '🏆',
+    name: 'Tier表作成',
+    desc: 'お題の選択肢から上位を選んで順位をつける',
+    modes: [
+      { id: 'guess', name: '🎯 当てる', desc: '1人が並べた順位を、ほかの人が予想する' },
+      { id: 'match', name: '🤝 相性診断', desc: '全員が並べて、誰と誰の価値観が近いかを診断する' },
+    ],
+  },
 ];
 
 function lobbyStageHtml() {
@@ -692,12 +702,23 @@ function lobbyStageHtml() {
     <div class="panel">
       <h3>遊ぶゲームを選ぶ <span class="hint">${host ? (few ? `${MIN_PLAYERS}人以上で始められます` : '押すとお題選びに進みます') : 'ホストが選びます'}</span></h3>
       <div class="game-grid">
-        ${GAMES.map((g) => `
-          <button class="game-box" data-action="start" data-game="${g.id}" ${host && !few && !g.soon ? '' : 'disabled'}>
+        ${GAMES.map((g) => (g.modes ? `
+          <div class="game-box with-modes">
             <span class="game-icon">${g.icon}</span>
-            <span class="game-name">${g.name}${g.soon ? '<span class="soon">準備中</span>' : ''}</span>
+            <span class="game-name">${g.name}</span>
             <span class="game-desc">${g.desc}</span>
-          </button>`).join('')}
+            <div class="mode-buttons">
+              ${g.modes.map((m) => `
+                <button class="mode-btn" data-action="start" data-game="${g.id}" data-mode="${m.id}" ${host && !few ? '' : 'disabled'}>
+                  <b>${m.name}</b><span>${m.desc}</span>
+                </button>`).join('')}
+            </div>
+          </div>` : `
+          <button class="game-box" data-action="start" data-game="${g.id}" ${host && !few ? '' : 'disabled'}>
+            <span class="game-icon">${g.icon}</span>
+            <span class="game-name">${g.name}</span>
+            <span class="game-desc">${g.desc}</span>
+          </button>`)).join('')}
       </div>
       ${few ? `<p class="hint">「招待リンクをコピー」で友達を呼びましょう（${MIN_PLAYERS}人から遊べます）</p>` : ''}
     </div>`;
@@ -716,7 +737,7 @@ function genreStageHtml() {
   return `
     <div class="panel">
       <div class="chooser-banner ${me ? 'me' : ''}">
-        🎲 今回のお題番${s.game === 'tier' ? '（並べる人）' : ''}：<b>${me ? 'あなた' : `${esc(nameOf(s, s.topic.chooser))} さん`}</b>
+        🎲 今回のお題番${s.game === 'tier' && s.tierMode !== 'match' ? '（並べる人）' : ''}：<b>${me ? 'あなた' : `${esc(nameOf(s, s.topic.chooser))} さん`}</b>
       </div>
       <h3>ジャンルを選ぶ <span class="hint">${!me ? 'お題番の人が選びます' : browse ? 'ジャンルを押すと、お題が一覧で出ます' : '押すとルーレットが回ります。もう一度押すと回し直せます'}</span></h3>
       <div class="genre-grid">
@@ -884,6 +905,7 @@ function controlsHtml() {
   const s = state;
   if (s.phase === 'lobby') return '';
   if (s.phase === 'tier') return tier.controlsHtml();
+  if (s.phase === 'matchResult') return tier.matchResultControlsHtml();
   if (s.phase === 'topic') return isChooser() || isHost() ? topicControlsHtml() : topicWaitingHtml();
   if (s.phase === 'playing') return `${handHtml()}${isHost() ? hostPlayingHtml() : ''}`;
   return isHost() ? hostRevealHtml() : `<div class="panel waiting">${revealStatus()}</div>`;
@@ -1059,6 +1081,13 @@ function settingsHtml() {
             ${[3, 4, 5, 6, 7].map((k) => `<option value="${k}" ${s.settings.tierCount === k ? 'selected' : ''}>上位${k}つ</option>`).join('')}
           </select>
           ${Object.keys(s.wins).length ? '<button class="btn ghost" data-action="reset-wins">勝ち数をリセット</button>' : ''}
+        </section>
+        <section class="set-sec">
+          <h4>相性診断の結果発表 <span class="hint">いつでもホストが「ここで結果発表」できます</span></h4>
+          <select data-change="match-rounds">
+            ${[3, 4, 5, 6, 7, 8, 9, 10].map((k) => `<option value="${k}" ${s.settings.matchRounds === k ? 'selected' : ''}>${k}回遊んだら</option>`).join('')}
+            <option value="0" ${s.settings.matchRounds === 0 ? 'selected' : ''}>エンドレス</option>
+          </select>
         </section>
         <section class="set-sec">
           <h4>ゲーム履歴</h4>
@@ -1251,10 +1280,32 @@ const actions = {
   start(el) {
     const game = el.dataset.game;
     if (game !== 'kazu' && game !== 'tier') return;
+    const mode = el.dataset.mode === 'match' ? 'match' : 'guess';
     update((s) => {
       if (s.phase !== 'lobby' || Object.keys(s.players).length < MIN_PLAYERS) return undefined;
       s.game = game;
+      if (game === 'tier') {
+        s.tierMode = mode;
+        // 相性診断は、ロビーから始めるたびに相性を0から貯め直す
+        if (mode === 'match') s.match = { rounds: 0, pairs: {} };
+      }
       return toTopic(s);
+    });
+  },
+
+  'match-result'() {
+    update((s) => {
+      if (s.phase !== 'tier' || s.tier?.mode !== 'match' || s.tier.step !== 'reveal') return undefined;
+      s.phase = 'matchResult';
+      return s;
+    });
+  },
+
+  'match-again'() {
+    update((s) => {
+      if (s.phase !== 'matchResult') return undefined;
+      s.match = { rounds: 0, pairs: {} };
+      return toTopic(backToLobby(s));
     });
   },
 
@@ -1578,6 +1629,14 @@ const inputs = {
 };
 
 const changes = {
+  'match-rounds'(el) {
+    update((s) => {
+      const n = Number(el.value);
+      s.settings.matchRounds = n === 0 ? 0 : Math.min(10, Math.max(3, n || 5));
+      return s;
+    });
+  },
+
   'tier-count'(el) {
     update((s) => {
       s.settings.tierCount = Math.min(7, Math.max(3, Number(el.value) || 5));
